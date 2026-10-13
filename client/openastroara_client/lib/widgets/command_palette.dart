@@ -308,7 +308,8 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
     final messenger = ScaffoldMessenger.maybeOf(rootContext); // grabbed before the await
     op().then((performed) {
       if (!performed) {
-        messenger?.showSnackBar(SnackBar(content: Text('Could not $what — is the device connected?')));
+        // false covers both the fence (another command still in flight) and no device.
+        messenger?.showSnackBar(SnackBar(content: Text('Could not $what — the device is not connected, or busy with another command.')));
       }
     }, onError: (Object e) {
       messenger?.showSnackBar(SnackBar(content: Text('Could not $what: $e')));

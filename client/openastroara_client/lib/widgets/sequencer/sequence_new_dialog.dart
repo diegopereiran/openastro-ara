@@ -228,10 +228,10 @@ Future<String?> createSequenceFromTemplate(
     return null;
   }
 
-  // Check mounted BEFORE touching ref: the sequence exists server-side now, but
-  // if the widget was disposed during the await, ref.invalidate/ref.read would
-  // throw on a defunct Ref. Return null (not the id): nothing was surfaced or
-  // selected, so the caller shouldn't treat it as a success to pop on.
+  // Check mounted BEFORE selecting: the sequence exists server-side now, but
+  // if the screen went away during the await there is nothing to show it in.
+  // Return null (not the id): nothing was surfaced or selected, so the caller
+  // shouldn't treat it as a success to pop on.
   if (!context.mounted) return null;
   container.invalidate(sequenceListProvider);
   container.read(selectedSequenceIdProvider.notifier).select(id);

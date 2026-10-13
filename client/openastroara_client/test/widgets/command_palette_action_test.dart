@@ -6,13 +6,17 @@ import 'package:openastroara/services/saved_server_service.dart';
 import 'package:openastroara/state/saved_server_state.dart';
 import 'package:openastroara/widgets/command_palette.dart';
 import 'package:openastroara/widgets/sky_atlas/session_plan_dialog.dart';
+import 'package:openastroara/models/camera_status.dart';
 import 'package:openastroara/models/discovered_device.dart';
+import 'package:openastroara/models/switch_device.dart';
 import 'package:openastroara/models/mount_status.dart';
 import 'package:openastroara/services/equipment_device_api.dart';
 import 'package:openastroara/services/tonight_sky_api.dart';
 import 'package:openastroara/state/app_shell_state.dart';
 import 'package:openastroara/state/ws/ws_providers.dart';
+import 'package:openastroara/state/equipment/camera_state.dart';
 import 'package:openastroara/state/equipment/mount_state.dart';
+import 'package:openastroara/state/equipment/switch_state.dart';
 import 'package:openastroara/state/settings/settings_nav.dart';
 import 'package:openastroara/state/sky_atlas/sky_atlas_state.dart';
 import 'package:openastroara/state/sky_atlas/tonight_sky_state.dart';
@@ -110,9 +114,50 @@ class _FakeMountApi implements EquipmentDeviceClient<MountStatus> {
   @override
   Future<void> disconnect() async {}
   @override
-  Future<void> command(String subpath, [Map<String, dynamic>? body]) async => commands.add(subpath);
+  Future<void> command(String subpath, [Map<String, dynamic>? body]) async {
+    if (throwOnCommand) throw Exception('mount offline');
+    commands.add(body == null ? subpath : '$subpath $body');
+  }
+  bool throwOnCommand = false;
   @override
   void close() {}
+}
+
+class _FakeCameraApi implements EquipmentDeviceClient<CameraStatus> {
+  final List<String> commands = [];
+  @override
+  Future<void> forget() async {}
+  @override
+  Future<CameraStatus?> getStatus() async => null;
+  @override
+  Future<void> connect(DiscoveredDevice device) async {}
+  @override
+  Future<void> disconnect() async {}
+  @override
+  Future<void> command(String subpath, [Map<String, dynamic>? body]) async => commands.add('$subpath $body');
+  @override
+  void close() {}
+}
+
+class _NoSwitches extends SwitchListNotifier {
+  @override
+  Future<List<SwitchDevice>> build() async => const [];
+}
+
+/// A palette over a rig with fake mount and camera clients ([connected] false
+/// = no active server, so every notifier action returns false).
+Future<(ProviderContainer, _FakeMountApi, _FakeCameraApi)> _pumpEquipmentPalette(WidgetTester tester,
+    {bool connected = true, bool mountThrows = false}) async {
+  final mountApi = _FakeMountApi()..throwOnCommand = mountThrows;
+  final cameraApi = _FakeCameraApi();
+  final container = await _pumpPalette(tester, [
+    if (connected) activeServerProvider.overrideWithValue(const AraServer(hostname: 'rig', port: 1)),
+    mountApiFactoryProvider.overrideWithValue((_) => mountApi),
+    cameraStatusApiFactoryProvider.overrideWithValue((_) => cameraApi),
+    switchListProvider.overrideWith(_NoSwitches.new),
+    wsEventsProvider.overrideWith((ref) => const Stream.empty()),
+  ]);
+  return (container, mountApi, cameraApi);
 }
 
 class _FakeSeqClient implements SequenceClient {
@@ -300,12 +345,21 @@ void main() {
       expect(client.calls, ['resume seq-1 recenter=false refocus=false']);
     });
 
-    testWidgets('while starting, Run and Pause both say to wait (neither key would act)', (tester) async {
-      final (_, client) = await _pumpRunPalette(tester, SequenceRunState.starting);
-      await _pick(tester, 'pause', 'Pause or resume the sequence (Space)');
-      expect(find.textContaining('wait for it to settle'), findsOneWidget);
-      expect(client.calls, isEmpty);
-    });
+    for (final (state, query, label) in const [
+      (SequenceRunState.starting, 'run or resume', 'Run or resume the sequence (⌘R)'),
+      (SequenceRunState.aborting, 'run or resume', 'Run or resume the sequence (⌘R)'),
+      (SequenceRunState.starting, 'pause', 'Pause or resume the sequence (Space)'),
+      (SequenceRunState.aborting, 'pause', 'Pause or resume the sequence (Space)'),
+    ]) {
+      testWidgets('while ${state.name}, "$label" says to wait (neither key would act)', (tester) async {
+        final (_, client) = await _pumpRunPalette(tester, state);
+        await _pick(tester, query, label);
+        expect(find.textContaining('wait for it to settle'), findsOneWidget);
+        expect(find.textContaining('already running'), findsNothing);
+        expect(find.textContaining('No sequence is running'), findsNothing);
+        expect(client.calls, isEmpty);
+      });
+    }
 
     testWidgets('Pause while running pauses', (tester) async {
       final (_, client) = await _pumpRunPalette(tester, SequenceRunState.running);
@@ -327,18 +381,44 @@ void main() {
       expect(client.calls, isEmpty);
     });
   });
-  testWidgets('#1170 "Park the mount" goes through the mount notifier (the chip\'s park)', (tester) async {
-    final mountApi = _FakeMountApi();
-    await _pumpPalette(tester, [
-      activeServerProvider.overrideWithValue(const AraServer(hostname: 'rig', port: 1)),
-      mountApiFactoryProvider.overrideWithValue((_) => mountApi),
-      wsEventsProvider.overrideWith((ref) => const Stream.empty()),
-    ]);
-    await tester.enterText(find.byType(TextField), 'park the mount');
-    await tester.pump();
-    await tester.tap(find.text('Park the mount'));
-    await tester.pumpAndSettle();
-    expect(mountApi.commands, ['park']);
+  group('#1170 equipment actions go through the chips\' notifiers', () {
+    const cases = <(String query, String label, String mountCommand)>[
+      ('park the mount', 'Park the mount', 'park'),
+      ('unpark', 'Unpark the mount', 'unpark'),
+      ('home position', "Find the mount's home position", 'home'),
+      ('start tracking', 'Start tracking', 'tracking {enabled: true}'),
+      ('stop tracking', 'Stop tracking', 'tracking {enabled: false}'),
+    ];
+    for (final (query, label, command) in cases) {
+      testWidgets('"$label" sends $command', (tester) async {
+        final (_, mountApi, cameraApi) = await _pumpEquipmentPalette(tester);
+        await _pick(tester, query, label);
+        expect(mountApi.commands, [command]);
+        expect(cameraApi.commands, isEmpty);
+      });
+    }
+
+    testWidgets('"Switch the camera cooler off" sends cooler enabled=false', (tester) async {
+      final (_, mountApi, cameraApi) = await _pumpEquipmentPalette(tester);
+      await _pick(tester, 'cooler off', 'Switch the camera cooler off');
+      expect(cameraApi.commands, ['cooler {enabled: false, target_temperature_c: null}']);
+      expect(mountApi.commands, isEmpty);
+    });
+
+    testWidgets('with no rig connected the notifier does nothing and the palette says so', (tester) async {
+      final (_, mountApi, _) = await _pumpEquipmentPalette(tester, connected: false);
+      await _pick(tester, 'park the mount', 'Park the mount');
+      expect(mountApi.commands, isEmpty);
+      expect(find.textContaining('Could not park the mount — the device is not connected'), findsOneWidget);
+    });
+
+    testWidgets('a failing command is reported with its error', (tester) async {
+      final (_, mountApi, _) = await _pumpEquipmentPalette(tester, mountThrows: true);
+      await _pick(tester, 'park the mount', 'Park the mount');
+      expect(mountApi.commands, isEmpty);
+      expect(find.textContaining('Could not park the mount: '), findsOneWidget);
+      expect(find.textContaining('mount offline'), findsOneWidget);
+    });
   });
 
   testWidgets('#1170 a daemon template is a "New sequence from template" entry that creates and selects the run', (tester) async {
