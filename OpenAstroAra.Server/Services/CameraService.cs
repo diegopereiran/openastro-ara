@@ -73,6 +73,13 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
     private readonly EquipmentEventPublisher? _events;
     private readonly IEquipmentFaultSink? _faults;
     private readonly DeviceConnectionProbe _probe = new();
+    // §42.3 second channel — the essential runtime read's health (the probe alone misses a bridge
+    // that answers Connected while every read fails, 2026-10-16). Mutated under _gate like _probe.
+    // Built in the constructor, once the fault sink is known.
+    private readonly DeviceHealthWatch _health;
+    private void ObserveRuntimeReadLocked(bool ok, string? reason, DiscoveredDeviceDto? device) => _health.Observe(ok, reason, device);
+    private void ResetHealthLocked() => _health.Reset();
+
     private readonly CoolingDriftMonitor _coolingDrift = new();
     private readonly object _gate = new();
     private readonly Timer _refreshTimer;
@@ -137,6 +144,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
         _filterWheel = filterWheel;
         _events = events;
         _faults = faults;
+        _health = new DeviceHealthWatch(DeviceType.Camera, faults);
         _frames = frames;
         _profileStore = profileStore;
         _fallbackFramesDir = fallbackFramesDir;
@@ -325,6 +333,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             _connectGeneration++;
             client = _client;
             _client = null;
+            ResetHealthLocked(); // a standing degraded episode ends with the session (resolved, not left to seed)
             _deviceBaseAddress = null;
             if (_device is not null) {
                 SetState(EquipmentConnectionState.Disconnected);
@@ -1788,7 +1797,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
                 return; // the device didn't answer — skip this pass's reads
             }
             ObserveProbeIfLive(client, probeSucceeded: true);
-            var runtime = ReadRuntime(client);
+            var runtime = ReadRuntime(client, out var readError);
             var caps = needCaps ? ReadCapabilities(client) : null;
             var capsCommitted = false;
             var driftVerdict = CoolingDriftVerdict.Idle;
@@ -1796,6 +1805,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             lock (_gate) {
                 if (_state == EquipmentConnectionState.Connected && ReferenceEquals(_client, client)) {
                     _runtime = runtime;
+                    ObserveRuntimeReadLocked(readError is null, readError, _device);
                     if (caps is not null) {
                         _capabilities = caps;
                         capsCommitted = true;
@@ -1949,9 +1959,13 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "Per-field read boundary: an unsupported/transiently-failing camera property falls back to its default rather than failing the whole runtime read. CA1031's log-and-recover boundary applies.")]
-    private static CameraStateDto ReadRuntime(AlpacaCamera c) {
+    private static CameraStateDto ReadRuntime(AlpacaCamera c, out string? readError) {
         CameraState state;
-        try { state = c.CameraState; } catch (Exception) { state = CameraState.Idle; }
+        readError = null;
+        // CameraState is the essential read: a streak of failures is a degraded fault (§42.3 second channel).
+        try { state = c.CameraState; }
+        catch (ASCOM.NotImplementedException) { state = CameraState.Idle; } // not a fault: the driver has no CameraState
+        catch (Exception ex) { state = CameraState.Idle; readError = ex.Message; }
         double? temp;
         try { temp = c.CCDTemperature; } catch (Exception) { temp = null; }
         bool coolerOn;
@@ -2113,7 +2127,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
                     _deviceNumber = device.AlpacaDeviceNumber;
                     _capabilities = null;   // re-read for the new device
                     _runtime = IdleRuntime; // don't serve a prior device's runtime
-                    _probe.Reset();         // §42.3 — a fresh session starts a fresh streak
+                    _probe.Reset(); ResetHealthLocked();         // §42.3 — a fresh session starts a fresh streak
                     _coolingDrift.Reset();  // §42.2 — no drift accumulation carries across sessions
                     SetState(EquipmentConnectionState.Connected);
                     adopted = true;
@@ -2218,7 +2232,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             }
             device = _device;
             SetState(EquipmentConnectionState.Error);
-            _probe.Reset();
+            _probe.Reset(); ResetHealthLocked();
             _coolingDrift.Reset();
         }
         LogConnectionLost(device?.Name ?? "?");

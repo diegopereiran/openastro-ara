@@ -32,6 +32,55 @@ void main() {
       expect(faultKindLevel('cooling_drift'), StatusLevel.busy);
       expect(faultKindLevel('some_future_kind'), StatusLevel.busy);
     });
+
+    test('degraded is amber but standing: no TTL, cleared by recovered or a connect', () {
+      expect(faultKindLevel('degraded'), StatusLevel.busy);
+      expect(isStandingFaultKind('degraded'), isTrue);
+      expect(isStandingFaultKind('disconnected'), isTrue);
+      expect(isStandingFaultKind('op_error'), isFalse);
+      expect(isStandingFaultKind('some_future_kind'), isFalse);
+
+      final acc = ActiveFaultsAccumulator();
+      final t0 = DateTime.utc(2026, 10, 16, 4);
+      acc.apply(_fault('filterwheel', 'degraded', ts: t0));
+      expect(acc.prune(t0.add(const Duration(hours: 2))), isNull,
+          reason: 'a degraded wheel stays amber until its reads come back');
+      expect(acc.snapshot.byDeviceType['filterwheel']!.level, StatusLevel.busy);
+
+      // The device's own recovery (reads back) clears it...
+      final recovered = acc.apply(_event(FaultWsEvents.actionTaken, {
+        'device_type': 'filterwheel',
+        'kind': 'degraded',
+        'action': 'recovered',
+        'source': 'device_reads',
+      }, ts: t0.add(const Duration(minutes: 3))));
+      expect(recovered, isNotNull);
+      expect(acc.snapshot.byDeviceType, isNot(contains('filterwheel')));
+
+      // A same-rank one-shot on the same device does not displace the standing
+      // entry: a filter change failing with op_error mid-outage must not let the
+      // TTL prune turn the chip green while the wheel is still broken.
+      acc.apply(_fault('filterwheel', 'degraded', ts: t0));
+      expect(acc.apply(_fault('filterwheel', 'op_error', ts: t0.add(const Duration(minutes: 1)))), isNull);
+      expect(acc.snapshot.byDeviceType['filterwheel']!.kind, 'degraded');
+      expect(acc.prune(t0.add(const Duration(minutes: 30))), isNull, reason: 'still standing');
+      // A worse fault still takes over, and a standing kind replaces a one-shot of equal rank.
+      acc.apply(_fault('filterwheel', 'disconnected', ts: t0.add(const Duration(minutes: 2))));
+      expect(acc.snapshot.byDeviceType['filterwheel']!.kind, 'disconnected');
+      acc.apply(_event(FaultWsEvents.actionTaken, {'device_type': 'filterwheel', 'action': 'recovered'}, ts: t0.add(const Duration(minutes: 3))));
+      acc.apply(_fault('filterwheel', 'op_error', ts: t0.add(const Duration(minutes: 4))));
+      expect(acc.apply(_fault('filterwheel', 'degraded', ts: t0.add(const Duration(minutes: 5)))), isNotNull);
+      expect(acc.snapshot.byDeviceType['filterwheel']!.kind, 'degraded');
+      acc.apply(_event(FaultWsEvents.actionTaken, {'device_type': 'filterwheel', 'action': 'recovered'}, ts: t0.add(const Duration(minutes: 6))));
+
+      // ...and so does a fresh connect (the user reconnected it by hand).
+      acc.apply(_fault('camera', 'degraded', ts: t0));
+      final connected = acc.apply(_event(FaultWsEvents.connected, {
+        'device_type': 'camera',
+      }, ts: t0.add(const Duration(minutes: 1))));
+      expect(connected, isNotNull);
+      expect(acc.snapshot.byDeviceType, isNot(contains('camera')));
+    });
   });
 
   group('blendFaultLevel', () {

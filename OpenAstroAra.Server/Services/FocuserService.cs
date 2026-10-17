@@ -56,6 +56,13 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
     private readonly EquipmentEventPublisher? _events;
     private readonly IEquipmentFaultSink? _faults;
     private readonly DeviceConnectionProbe _probe = new();
+    // §42.3 second channel — the essential runtime read's health (the probe alone misses a bridge
+    // that answers Connected while every read fails, 2026-10-16). Mutated under _gate like _probe.
+    // Built in the constructor, once the fault sink is known.
+    private readonly DeviceHealthWatch _health;
+    private void ObserveRuntimeReadLocked(bool ok, string? reason, DiscoveredDeviceDto? device) => _health.Observe(ok, reason, device);
+    private void ResetHealthLocked() => _health.Reset();
+
     private readonly object _gate = new();
     private readonly Timer _refreshTimer;
     // #1265 — bench-test knob: re-arms the refresh timer at a shorter cadence so a fixture that
@@ -76,6 +83,7 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
         _logger = logger ?? NullLogger<FocuserService>.Instance;
         _events = events;
         _faults = faults;
+        _health = new DeviceHealthWatch(DeviceType.Focuser, faults);
         _refreshTimer = new Timer(RefreshTick, state: null, dueTime: RefreshInterval, period: RefreshInterval);
     }
 
@@ -154,6 +162,7 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
             _connectGeneration++;
             client = _client;
             _client = null;
+            ResetHealthLocked(); // a standing degraded episode ends with the session (resolved, not left to seed)
             if (_device is not null) {
                 SetState(EquipmentConnectionState.Disconnected);
             }
@@ -239,11 +248,14 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
                 return; // the device didn't answer — skip this tick's reads
             }
             ObserveProbeIfLive(client, probeSucceeded: true);
-            var runtime = ReadRuntime(client);
+            var runtime = ReadRuntime(client, out var readError);
             var caps = needCaps ? ReadCapabilities(client) : null;
             lock (_gate) {
                 if (_state == EquipmentConnectionState.Connected && ReferenceEquals(_client, client)) {
                     _runtime = runtime;
+                    // A relative focuser may have no Position to read (NotImplemented is already excluded; some
+                    // drivers answer with a plain error instead): only an absolute focuser's Position is essential.
+                    ObserveRuntimeReadLocked(readError is null || !(_capabilities?.AbsoluteFocuser ?? true), readError, _device);
                     if (caps is not null) {
                         _capabilities = caps;
                     }
@@ -258,11 +270,15 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "Per-field read boundary: an unsupported/transiently-failing focuser property (e.g. Temperature on a focuser with no probe) throws; that field is reported absent/default rather than failing the whole runtime read. CA1031's log-and-recover boundary applies.")]
-    private static FocuserStateDto ReadRuntime(AlpacaFocuser c) {
+    private static FocuserStateDto ReadRuntime(AlpacaFocuser c, out string? readError) {
         bool moving;
+        readError = null;
         try { moving = c.IsMoving; } catch (Exception) { moving = false; }
         int? position;
-        try { position = c.Position; } catch (Exception) { position = null; }
+        // Position is the essential read: a streak of failures is a degraded fault (§42.3 second channel).
+        try { position = c.Position; }
+        catch (ASCOM.NotImplementedException) { position = null; } // not a fault: the driver has no Position
+        catch (Exception ex) { position = null; readError = ex.Message; }
         double? temperature;
         try { temperature = c.Temperature; } catch (Exception) { temperature = null; }
         bool tempComp;
@@ -315,7 +331,7 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
                     _client = client;
                     _capabilities = null;       // re-read for the new device
                     _runtime = IdleRuntime;     // don't serve a prior device's runtime
-                    _probe.Reset();             // §42.3 — a fresh session starts a fresh streak
+                    _probe.Reset(); ResetHealthLocked();             // §42.3 — a fresh session starts a fresh streak
                     SetState(EquipmentConnectionState.Connected);
                     adopted = true;
                 }
@@ -415,7 +431,7 @@ public sealed partial class FocuserService : IFocuserService, IRetainedDeviceSou
             }
             device = _device;
             SetState(EquipmentConnectionState.Error);
-            _probe.Reset();
+            _probe.Reset(); ResetHealthLocked();
         }
         LogConnectionLost(device?.Name ?? "?");
         _faults?.Publish(new EquipmentFaultEvent(DeviceType.Focuser, device?.UniqueId, device?.Name,
