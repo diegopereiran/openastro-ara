@@ -534,7 +534,11 @@ namespace OpenAstroAra.Equipment.Equipment.MyGuider.PHD2 {
                 if (ditherMsgResponse.error != null) {
                     /* Dither failed */
                     Settling = false;
-                    _lastSettleError = ditherMsgResponse.error.ToString();
+                    // The guider's own words (ToString() was the PhdError type name — the verdict the
+                    // Dither instruction shows the user must be the message).
+                    _lastSettleError = string.IsNullOrWhiteSpace(ditherMsgResponse.error.message)
+                        ? $"dither refused by the guider (code {ditherMsgResponse.error.code})"
+                        : ditherMsgResponse.error.message;
                     return false;
                 }
                 await WaitForSettling(progress, ct);
@@ -1238,7 +1242,9 @@ namespace OpenAstroAra.Equipment.Equipment.MyGuider.PHD2 {
                         // as WaitForSettling sees the flag drop.
                         _lastSettleError = string.IsNullOrEmpty(settleDone?.Error) ? null : settleDone!.Error;
                         Settling = false;
-                        if (settleDone.Error != null) {
+                        // A successful SettleDone carries Error "" from the guider, not null: the night of
+                        // 2026-10-16 logged 46 empty "PHD2 error:" lines, each escalated to a warning.
+                        if (!string.IsNullOrEmpty(settleDone.Error)) {
                             Logger.Error("PHD2 error:" + settleDone.Error);
                             Notifier.ShowExternalWarning(settleDone.Error, Loc.Instance["LblPhd2Warning"]);
                         } else {

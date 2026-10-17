@@ -199,6 +199,9 @@ public sealed partial class GuiderService : IGuiderMediator {
     public async Task<bool> Dither(CancellationToken token) {
         var guider = MediatorGuider();
         if (guider is null) {
+            // No connected guider: a plain refusal, so the previous dither's verdict can't be read as
+            // this one's (the Dither instruction then reports "not connected").
+            LastDitherError = "refused";
             return false;
         }
         var sent = await guider.Dither(_noProgress, token).ConfigureAwait(false);
@@ -206,12 +209,18 @@ public sealed partial class GuiderService : IGuiderMediator {
         // nothing was accepted over REST), so the Live tab sees a settle failure as it happens.
         // An abort mid-settle makes Dither() return true with no verdict (WaitForSettling
         // swallows the cancellation) — that is not a settled dither (#1351 r1 note).
-        var error = !sent ? "refused"
+        // A refusal carries the guider's own reason when it has one (the dither RPC errored); a plain
+        // "refused" means it was not guiding.
+        var error = !sent ? (guider.LastSettleError ?? "refused")
             : token.IsCancellationRequested ? "cancelled"
             : guider.LastSettleError;
+        // The verdict is set BEFORE the publish so a publish fault can't leave the previous one in place.
+        LastDitherError = error;
         await PublishDitherCompleteAsync(operationId: null, ok: sent && error is null, error).ConfigureAwait(false);
         return sent;
     }
+
+    public string? LastDitherError { get; private set; }
 
     public Task<bool> AutoSelectGuideStar(CancellationToken token) =>
         MediatorGuider()?.AutoSelectGuideStar() ?? Task.FromResult(false);

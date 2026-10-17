@@ -112,6 +112,14 @@ namespace OpenAstroAra.Sequencer.Trigger {
             Status = SequenceEntityStatus.RUNNING;
 
             var root = ItemUtility.GetRootContainer(this.Parent);
+            // The runner deliberately hangs off nothing (its items must not walk the enclosing
+            // containers' triggers and conditions), so it carries the run's pause gate itself: a
+            // Dither inside the Dither-after-exposures trigger parks the run on a failed settle
+            // exactly like a Dither in the tree (2026-10-16: a runner with no gate just failed the
+            // trigger and the next frame started on the unsettled star).
+            if (this.TriggerRunner is IPauseGateHost runnerGate) {
+                runnerGate.PauseGate = (root as IPauseGateHost)?.PauseGate;
+            }
             try {
                 Logger.Info($"Starting {this}");
                 this.TriggerRunner.ResetAll();
@@ -144,6 +152,11 @@ namespace OpenAstroAra.Sequencer.Trigger {
                 Logger.Error(ex);
                 root?.RaiseFailureEvent(this, ex);
                 //Todo Error policy - e.g. Continue; Throw and cancel; Retry;
+            } finally {
+                // The gate is lent for this run only; a cloned or standalone runner must not keep it.
+                if (this.TriggerRunner is IPauseGateHost lent) {
+                    lent.PauseGate = null;
+                }
             }
         }
 
