@@ -147,15 +147,17 @@ public sealed partial class AutofocusSweepService {
                 // re-entered from above through the sweep's overshoot so the focuser rests on the same
                 // side of its backlash as the calibration's own best. A straight return would land the
                 // optics a backlash short of 29463 while the counter said 29463 (2026-10-03).
-                var minusPosition = await _focuser.MoveFocuser(startPosition - bracket, token).ConfigureAwait(false);
+                var travel = (_travelRange is null ? null : await _travelRange(token).ConfigureAwait(false)) ?? (0, int.MaxValue);
+                var (minusTarget, plusTarget, overshoot) = BracketMoves(startPosition, bracket, settings.StepSize, travel);
+                var minusPosition = await _focuser.MoveFocuser(minusTarget, token).ConfigureAwait(false);
                 var minus = await TakeSmartShotAsync(2, minusPosition, settings, progress, token).ConfigureAwait(false);
                 // The + side is entered from above as well, through an overshoot of one bracket, so it is a
                 // downward move like every other sample and backlash cannot shorten it. Compensating an upward
                 // move needs a measured backlash, and the probe measures at the V's flat bottom where it cannot
                 // see one: 2026-10-17 it stored 0 "verified" on a ZWO EAF whose upward move then landed ≈ 40
                 // steps short (1.27 where the downward sweep read 1.8), and the bracket saw "no clear rise".
-                await _focuser.MoveFocuser(startPosition + 2 * bracket, token).ConfigureAwait(false);
-                var plusPosition = await _focuser.MoveFocuser(startPosition + bracket, token).ConfigureAwait(false);
+                await _focuser.MoveFocuser(overshoot, token).ConfigureAwait(false);
+                var plusPosition = await _focuser.MoveFocuser(plusTarget, token).ConfigureAwait(false);
                 var plus = await TakeSmartShotAsync(3, plusPosition, settings, progress, token).ConfigureAwait(false);
                 var verdict = BracketVerdict(shot1.Hfr, plus, minus);
                 LogSmartBracket(bracket, shot1.Hfr, plus.Hfr, minus.Hfr, verdict ?? "confirmed");
@@ -368,6 +370,18 @@ public sealed partial class AutofocusSweepService {
         } catch (Exception ex) {
             LogCalibrationRecordFailed(ex);
         }
+    }
+
+    /// <summary>The bracket's three commanded positions inside the focuser's travel: the − side no lower than
+    /// the travel's bottom, the + side no higher than one step below its top, and the overshoot the + side is
+    /// entered from at least one step above it and never past the top. Near the top of the travel a bare
+    /// <c>start + 2·bracket</c> was either refused (the whole run failed) or clamped onto the + side itself,
+    /// which turned the + landing back into an upward move and let backlash shorten it again.</summary>
+    internal static (int Minus, int Plus, int Overshoot) BracketMoves(int start, int bracket, int stepSize, (int Min, int Max) travel) {
+        var minus = Math.Max(start - bracket, travel.Min);
+        var plus = Math.Min(start + bracket, travel.Max - stepSize);
+        var overshoot = Math.Min(Math.Max(start + 2 * bracket, plus + stepSize), travel.Max);
+        return (minus, plus, overshoot);
     }
 
     /// <summary>Every landing in the bracket is made from above — the direction the calibration's

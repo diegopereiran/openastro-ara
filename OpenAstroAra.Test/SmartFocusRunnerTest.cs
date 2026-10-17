@@ -117,7 +117,8 @@ namespace OpenAstroAra.Test {
                 string telescopeType = "other",
                 Func<int, double>? skySkew = null,
                 Func<int, bool>? noiseFlooded = null,
-                int upwardBacklash = 0) {
+                int upwardBacklash = 0,
+                (int Min, int Max)? travel = null) {
             var store = new InMemoryProfileStore();
             store.PutAutofocusSettings(Settings(restoreOnFailure, telescopeType));
             if (calibration is not null) {
@@ -163,6 +164,7 @@ namespace OpenAstroAra.Test {
                 ws: ws.Object,
                 notifications: notifications.Object,
                 tracker: tracker,
+                travelRange: travel is null ? null : _ => Task.FromResult<(int Min, int Max)?>(travel),
                 metric: (_, _) => {
                     captures++;
                     var hfr = skyHfr is null ? VCurveHfr(physical, realBest) : skyHfr(captures, physical);
@@ -354,6 +356,30 @@ namespace OpenAstroAra.Test {
             Assert.That(ok, Is.True);
             Assert.That(rig.Moves, Is.EqualTo(ThreeShotMoves));
             Assert.That(rig.CaptureCount(), Is.EqualTo(4), "a symmetric V: no vertex shot, no fallback");
+        }
+
+        [Test]
+        public async Task The_bracket_overshoot_stays_inside_the_focuser_travel() {
+            // Focus 250 steps below the top of the travel: a bare start + 2 × 200 overshoot would be refused or
+            // clamped onto the + side itself. The overshoot stops at the top, the + side sits one step below it
+            // (still entered from above), and the vertex is judged on the offsets actually reached.
+            var rig = Build(realBest: StartPosition, calibration: Calibration(bestPosition: StartPosition), upwardBacklash: 80,
+                travel: (0, StartPosition + 250));
+            using var _ = rig.Service;
+
+            var ok = await rig.Service.RunAutofocusAsync(NoProgress, CancellationToken.None);
+
+            Assert.That(ok, Is.True);
+            Assert.That(rig.Moves, Is.EqualTo(new[] { StartPosition - 200, StartPosition + 250, StartPosition + 150, StartPosition + 100, StartPosition }));
+            Assert.That(rig.Moves.Max(), Is.LessThanOrEqualTo(StartPosition + 250), "never past the travel");
+        }
+
+        [Test]
+        public void BracketMoves_clamp_to_the_travel() {
+            Assert.That(AutofocusSweepService.BracketMoves(1000, 200, 100, (0, int.MaxValue)), Is.EqualTo((800, 1200, 1400)), "unbounded: ± bracket, overshoot one bracket further");
+            Assert.That(AutofocusSweepService.BracketMoves(1000, 200, 100, (0, 1250)), Is.EqualTo((800, 1150, 1250)), "near the top: + side one step below the stop, overshoot at the stop");
+            Assert.That(AutofocusSweepService.BracketMoves(1000, 200, 100, (0, 1300)), Is.EqualTo((800, 1200, 1300)), "room for the + side but not the full overshoot");
+            Assert.That(AutofocusSweepService.BracketMoves(100, 200, 100, (0, 5000)), Is.EqualTo((0, 300, 500)), "the − side stops at the bottom");
         }
 
         [Test]

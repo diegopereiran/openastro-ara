@@ -138,7 +138,12 @@ public sealed partial class AutofocusSweepService : IAutofocusExecutor, IDisposa
     // for every probe of the sweep. Returns the whole result (not just HFR + count) so the sweep can
     // also read each probe's per-star donut metrics for the §59.10 end-of-sweep collimation check.
     internal static StarDetectionResult DefaultMetric(AnalysisFrame frame, CancellationToken ct) {
-        var pixels = EqualiseBayerPhases(frame.Pixels.Span, frame.Width, frame.Height);
+        // Only a raw colour mosaic has phases to equalise. A mono frame's four phases differ by sampling
+        // noise alone, and shifting them by that would stamp a faint checkerboard on it, so the frame's own
+        // Bayer pattern (null for mono or a binned readout) is the gate, not the medians.
+        var pixels = frame.BayerPattern is null
+            ? frame.Pixels.Span
+            : EqualiseBayerPhases(frame.Pixels.Span, frame.Width, frame.Height);
         var result = StarDetector.Detect(
             pixels, frame.Width, frame.Height,
             new StarDetectionParams { Sensitivity = 8.0, NoiseReduction = 0, IsAutoFocus = true },
@@ -157,8 +162,9 @@ public sealed partial class AutofocusSweepService : IAutofocusExecutor, IDisposa
     /// L-eNhance filter at offset 50: R 2073, G 2004, B 3796 ADU), and the detector's robust sigma then
     /// measures that step instead of the noise: 65 ADU against a real 6-12, a threshold eight sigmas up, and
     /// 26 stars detected where the frame held about 240. Equalised, it found 237, and stopped depending on the
-    /// camera offset. A mono frame's phases share one background, so it comes back unchanged. Resolution is
-    /// kept, unlike a 2×2 superpixel bin.
+    /// camera offset. Resolution is kept, unlike a 2×2 superpixel bin. The caller applies it to raw colour
+    /// mosaics only (<see cref="AnalysisFrame.BayerPattern"/>); a frame whose sampled medians already agree
+    /// comes back as is.
     /// </summary>
     internal static ReadOnlySpan<ushort> EqualiseBayerPhases(ReadOnlySpan<ushort> pixels, int width, int height) {
         if (width < 4 || height < 4) {

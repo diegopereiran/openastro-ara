@@ -1439,6 +1439,43 @@ namespace OpenAstroAra.Test {
                     pixels[y * size + x] = (ushort)Math.Clamp(v, 0, 65535);
                 }
             }
+            return new AnalysisFrame(pixels, size, size, DateTimeOffset.UnixEpoch, "RGGB");
+        }
+
+        [Test]
+        public void DefaultMetric_equalises_the_bayer_phases_only_when_the_frame_carries_a_pattern() {
+            // The same uneven frame tagged mono must measure as the raw detector would (no equalisation), and
+            // a mono frame whose sampled phase medians differ by noise alone must come back untouched.
+            var colour = UnevenBayerFrame();
+            var asMono = colour with { BayerPattern = null };
+            var direct = StarDetector.Detect(asMono.Pixels.Span, asMono.Width, asMono.Height,
+                new StarDetectionParams { Sensitivity = 8.0, NoiseReduction = 0, IsAutoFocus = true });
+            var viaMetric = AutofocusSweepService.DefaultMetric(asMono, CancellationToken.None);
+            Assert.That(viaMetric.DetectedStars, Is.EqualTo(direct.DetectedStars), "a frame without a Bayer pattern is not equalised");
+            Assert.That(viaMetric.DetectedStars, Is.LessThan(AutofocusSweepService.DefaultMetric(colour, CancellationToken.None).DetectedStars));
+
+            var noisy = NoisyMonoFrame(256);
+            var measured = AutofocusSweepService.DefaultMetric(noisy, CancellationToken.None);
+            var raw = StarDetector.Detect(noisy.Pixels.Span, noisy.Width, noisy.Height,
+                new StarDetectionParams { Sensitivity = 8.0, NoiseReduction = 0, IsAutoFocus = true });
+            Assert.That(measured.AverageHFR, Is.EqualTo(raw.AverageHFR).Within(1e-9), "the metric leaves a mono frame alone");
+        }
+
+        /// <summary>A mono frame with 1000 ADU background, a few ADU of pseudo-noise and a handful of stars.</summary>
+        private static AnalysisFrame NoisyMonoFrame(int size) {
+            var pixels = new ushort[size * size];
+            uint state = 4242;
+            double Next() { state = state * 1664525u + 1013904223u; return (state >> 8) / 16777216.0; }
+            for (int y = 0; y < size; y++) {
+                for (int x = 0; x < size; x++) {
+                    var v = 1000.0 + 20.0 * (Next() - 0.5);
+                    var cx = (x / 64) * 64 + 32;
+                    var cy = (y / 64) * 64 + 32;
+                    var r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+                    v += 20000.0 * Math.Exp(-r2 / (2 * 1.5 * 1.5));
+                    pixels[y * size + x] = (ushort)Math.Clamp(v, 0, 65535);
+                }
+            }
             return new AnalysisFrame(pixels, size, size, DateTimeOffset.UnixEpoch);
         }
 
