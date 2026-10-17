@@ -767,6 +767,93 @@ namespace OpenAstroAra.Test {
         }
 
         [Test]
+        public async Task An_adoptable_daemon_pause_is_reported_by_the_next_daemon_pause_so_its_auto_resume_covers_it() {
+            // §42.2 — the star-lost watch pauses adoptably: if safety goes unsafe before the star is back,
+            // safety's bulk pause must report the run among its own ids, or auto-resume-when-safe would
+            // leave it parked behind a release that can never come (a parked, stopped guider sends no
+            // guide step). A plain daemon pause keeps the old rule (never adopted — see the test above).
+            var id = Guid.NewGuid();
+            var ws = new RecordingWsBroadcaster();
+            var svc = BuildService(id, BuildBody(c => {
+                c.Items.Add(new WaitForTimeSpan { Time = 2 });
+                c.Items.Add(new Annotation { Name = "after-star-lost-pause" });
+            }), ws);
+            await svc.StartAsync(id, StartReq, null, CancellationToken.None);
+            await WaitForInstructionInFlightAsync(svc, id, 0);
+
+            var starLost = await svc.PauseActiveRunsAsync(adoptable: true, CancellationToken.None);
+            Assert.That(starLost, Is.EquivalentTo(new[] { id }));
+            await WaitForStateAsync(svc, id, SequenceRunState.Paused);
+
+            var safety = await svc.PauseActiveRunsAsync(CancellationToken.None);
+            Assert.That(safety, Is.EquivalentTo(new[] { id }), "the later daemon pause adopts the star-lost pause");
+
+            Assert.That(await svc.ResumeRunsAsync(safety, CancellationToken.None), Is.EqualTo(1));
+            Assert.That(await svc.PauseActiveRunsAsync(CancellationToken.None), Is.Not.Empty.And.Not.Null,
+                "after the release the run is Running again and a fresh pause arms it");
+            await svc.ResumeRunsAsync(new[] { id }, CancellationToken.None);
+            var state = await WaitForTerminalAsync(svc, id);
+            Assert.That(state!.State, Is.EqualTo(SequenceRunState.Completed));
+        }
+
+        [Test]
+        public async Task A_users_pause_after_an_adoptable_one_is_neither_adopted_nor_released_by_a_daemon() {
+            // Review r2: adoptable pause → user Resume → user Pause → the next bulk pause must report
+            // nothing, and a daemon resume (safety's auto-resume, the star-lost watch) must not release
+            // the user's pause. Only the user's own Resume does.
+            var id = Guid.NewGuid();
+            var ws = new RecordingWsBroadcaster();
+            var svc = BuildService(id, BuildBody(c => {
+                c.Items.Add(new WaitForTimeSpan { Time = 2 });
+                c.Items.Add(new WaitForTimeSpan { Time = 2 });
+                c.Items.Add(new Annotation { Name = "after-user-pause" });
+            }), ws);
+            await svc.StartAsync(id, StartReq, null, CancellationToken.None);
+            await WaitForInstructionInFlightAsync(svc, id, 0);
+
+            Assert.That(await svc.PauseActiveRunsAsync(adoptable: true, CancellationToken.None), Is.EquivalentTo(new[] { id }));
+            await WaitForStateAsync(svc, id, SequenceRunState.Paused);
+            await svc.ResumeAsync(id, null, null, CancellationToken.None); // the user resumes while the star is still lost
+            await WaitForStateAsync(svc, id, SequenceRunState.Running);
+            await svc.PauseAsync(id, null, CancellationToken.None);         // and later pauses for reasons of their own
+            await WaitForStateAsync(svc, id, SequenceRunState.Paused);
+
+            Assert.That(await svc.PauseActiveRunsAsync(CancellationToken.None), Is.Empty, "a user's pause is never adopted");
+            Assert.That(await svc.ResumeRunsAsync(new[] { id }, CancellationToken.None), Is.Zero, "a daemon resume never releases a user's pause");
+            Assert.That((await svc.GetRunStateAsync(id, CancellationToken.None))!.State, Is.EqualTo(SequenceRunState.Paused));
+
+            await svc.ResumeAsync(id, null, null, CancellationToken.None);
+            var state = await WaitForTerminalAsync(svc, id);
+            Assert.That(state!.State, Is.EqualTo(SequenceRunState.Completed));
+        }
+
+        [Test]
+        public async Task A_daemon_resume_ends_adoptability_so_a_following_user_pause_stays_the_users() {
+            // Review r2 note: ResumeRunsAsync clears the custody flags — pinned here (a fresh daemon pause
+            // would otherwise hide a missing reset).
+            var id = Guid.NewGuid();
+            var ws = new RecordingWsBroadcaster();
+            var svc = BuildService(id, BuildBody(c => {
+                c.Items.Add(new WaitForTimeSpan { Time = 2 });
+                c.Items.Add(new WaitForTimeSpan { Time = 2 });
+                c.Items.Add(new Annotation { Name = "after" });
+            }), ws);
+            await svc.StartAsync(id, StartReq, null, CancellationToken.None);
+            await WaitForInstructionInFlightAsync(svc, id, 0);
+
+            var starLost = await svc.PauseActiveRunsAsync(adoptable: true, CancellationToken.None);
+            await WaitForStateAsync(svc, id, SequenceRunState.Paused);
+            Assert.That(await svc.ResumeRunsAsync(starLost, CancellationToken.None), Is.EqualTo(1));
+            await WaitForStateAsync(svc, id, SequenceRunState.Running);
+            await svc.PauseAsync(id, null, CancellationToken.None);
+            await WaitForStateAsync(svc, id, SequenceRunState.Paused);
+
+            Assert.That(await svc.PauseActiveRunsAsync(CancellationToken.None), Is.Empty, "custody ended with the daemon release; the user's pause is theirs");
+            await svc.ResumeAsync(id, null, null, CancellationToken.None);
+            Assert.That((await WaitForTerminalAsync(svc, id))!.State, Is.EqualTo(SequenceRunState.Completed));
+        }
+
+        [Test]
         public async Task SkipActiveRunsAsync_advances_a_running_run_past_its_current_instruction() {
             // §42.2 skip_target: the bulk skip cancels the currently-running items
             // (here a long wait) so the engine advances — the run completes early
