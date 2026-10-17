@@ -171,7 +171,8 @@ public sealed partial class AutofocusSweepService : IAutofocusExecutor, IDisposa
             return pixels;
         }
         Span<int> medians = stackalloc int[4];
-        // Sample every 8th row and column of each phase: the background median needs thousands of pixels,
+        // Sample each phase on a grid whose stride puts about 20,000 pixels in the four medians together
+        // (≈ 20 rows and columns apart on an 8 MP frame): the background median needs thousands of pixels,
         // not millions (the detector's own background estimate samples the same way).
         var stride = Math.Max(2, (int)Math.Sqrt((double)width * height / 20_000) & ~1);
         for (var phase = 0; phase < 4; phase++) {

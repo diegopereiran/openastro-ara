@@ -1372,6 +1372,46 @@ namespace OpenAstroAra.Test {
         }
 
         [Test]
+        public async Task A_completed_sweep_stores_the_probe_measured_width_when_the_fit_reads_wider() {
+            // A sky whose HFR grows linearly with defocus (1.5 + |d|/50, doubling 75 steps out). The hyperbolic
+            // and parabolic models both round that corner off and reach twice their minimum further out than
+            // the probes do; the stored width must be the probes', so the next automatic sweep is not sized wide.
+            const int best = 10_000;
+            var position = 10_000;
+            var moves = new List<int>();
+            var focuser = new Mock<IFocuserMediator>();
+            focuser.Setup(f => f.GetInfo()).Returns(() => new FocuserInfo { Connected = true, Position = position, Temperature = double.NaN });
+            focuser.Setup(f => f.MoveFocuser(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .Returns<int, CancellationToken>((p, _) => { position = p; moves.Add(p); return Task.FromResult(p); });
+            var store = new InMemoryProfileStore();
+            store.PutAutofocusSettings(Settings(steps: 4, stepSize: 40, stepSizeAuto: false));
+            var probes = new List<FocusPoint>();
+            var posted = new List<NotificationDto>();
+            var notifications = new Mock<INotificationService>();
+            notifications.Setup(n => n.CreateAsync(It.IsAny<NotificationDto>(), It.IsAny<CancellationToken>()))
+                .Returns<NotificationDto, CancellationToken>((d, _) => { posted.Add(d); return Task.CompletedTask; });
+            using var svc = new AutofocusSweepService(
+                store, focuser.Object, Frames().Object,
+                metric: (_, _) => {
+                    var hfr = 1.5 + Math.Abs(position - best) / 50.0;
+                    probes.Add(new FocusPoint(position, hfr, 30));
+                    return Result(hfr, 30, FeatureStars(12, hfr));
+                },
+                coarseMetric: (_, _) => Math.Abs(position - best) < 50 ? double.PositiveInfinity : 4.0 + 0.03 * Math.Abs(position - best),
+                notifications: notifications.Object);
+
+            var ok = await svc.RunAutofocusAsync(NoProgress, CancellationToken.None);
+
+            Assert.That(ok, Is.True, string.Join(" | ", posted.Select(n => n.Message)));
+            var measured = AutofocusSweepService.MeasuredHalfWidth(probes.Where(p => Math.Abs(p.Position - best) <= 160).ToList());
+            var fit = FocusCurveFit.FitBest(probes.Where(p => Math.Abs(p.Position - best) <= 160).ToList());
+            var model = AutofocusSweepService.CurveHalfWidth(fit!, best - 160, best + 160);
+            Assert.That(model, Is.GreaterThan(measured!.Value + 5), "precondition: the fitted curve reads wider than the probes");
+            Assert.That(store.GetFocusCalibration()!.CurveHalfWidthSteps, Is.EqualTo(measured.Value).Within(1.0),
+                "the narrower, probe-measured width is stored");
+        }
+
+        [Test]
         public async Task Coarse_search_keeps_a_sharp_start_near_the_travel_stop() {
             // Focus 120 above the travel stop with a ±400 half-width: the lower neighbour would be at -280, so the
             // bracket is checked at the stop itself (0) instead of giving up on it.
