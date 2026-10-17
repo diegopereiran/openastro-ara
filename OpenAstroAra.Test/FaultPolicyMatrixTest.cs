@@ -178,5 +178,21 @@ namespace OpenAstroAra.Test {
             Assert.That(plan.Escalated, Is.False, "disconnects run the §42.3 reconnect episode, never the op escalation");
             Assert.That(plan.RetrySchedule, Is.EqualTo(FaultPolicyMatrix.HotReconnectLadder));
         }
+
+        [Test]
+        public void A_degraded_device_is_notify_only_its_own_reads_are_the_recovery() {
+            // 2026-10-16: the wheel and the camera kept answering their probe while every read failed. A
+            // ladder "reconnect" on an already-Connected device is a no-op that would report recovered
+            // while the reads still fail (review on #1384), so the plan has no attempts.
+            foreach (var type in new[] { DeviceType.FilterWheel, DeviceType.Camera, DeviceType.Focuser, DeviceType.Rotator }) {
+                var plan = FaultPolicyMatrix.Resolve(type, EquipmentFaultKind.Degraded, policies: null)!;
+                Assert.That(plan.RetrySchedule, Is.Empty, type.ToString());
+                Assert.That(plan.TerminalAction, Is.EqualTo(FaultTerminalAction.None), "nothing to escalate to: the device still answers");
+                Assert.That(plan.PauseWhileRecovering, Is.False, "the instruction that needs the device reports its own failure");
+                Assert.That(plan.GiveUpSeverity, Is.EqualTo(NotificationSeverity.Warning));
+                Assert.That(plan.Escalated, Is.False);
+            }
+            Assert.That(FaultPolicyMatrix.Resolve(DeviceType.Guider, EquipmentFaultKind.Degraded, null), Is.Null, "the guider owns its own reactions");
+        }
     }
 }

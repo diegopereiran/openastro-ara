@@ -105,6 +105,16 @@ public static class FaultPolicyMatrix {
                 // Recovery attempt = re-enable tracking (the mount is still connected).
                 return FromPolicy(policies?.OnTrackingLost, "reenable_then_pause",
                     hot, NotificationSeverity.Error, pauseWhileRecovering: true);
+            case EquipmentFaultKind.Degraded:
+                // The device answers its probe but its reads fail (2026-10-16: EFW_ERROR_REMOVED on
+                // every wheel position read, the camera's state read failing the same way, both
+                // chips green). Notify only: the standing amber is cleared by the device's OWN
+                // recovery (the service's Recovered when the reads come back) or by the user's
+                // reconnect. No ladder attempt — a service's ConnectAsync on an already-Connected
+                // device is a no-op (review on #1384), so a "reconnect" here would report
+                // recovered while the reads still fail and drop the chip back to green. Nothing is
+                // paused: the instruction that needs the device still fails on its own.
+                return new FaultPlan(NoRetries, FaultTerminalAction.None, NotificationSeverity.Warning, PauseWhileRecovering: false);
             default:
                 // §42.2 escalation rows — PERSISTENT op failures stop being instruction-level
                 // news: a mount that keeps failing slews may be against an obstruction
