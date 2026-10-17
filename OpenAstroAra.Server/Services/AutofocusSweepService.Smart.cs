@@ -142,13 +142,19 @@ public sealed partial class AutofocusSweepService {
                 // shots. A side that reads BETTER → the centre is not the minimum → the classic sweep.
                 await PublishShotCompleteAsync(1, startPosition, shot1, null, null).ConfigureAwait(false);
                 var bracket = BracketOffset(calibration.CurveHalfWidthSteps, settings);
-                // Backlash discipline, same as the sweep: the − side is reached moving DOWN (the direction
-                // every calibration sample was approached from), the + side moving up, and the centre is
-                // re-entered from above through the sweep's overshoot so the focuser rests on the same
-                // side of its backlash as the calibration's own best. A straight return would land the
-                // optics a backlash short of 29463 while the counter said 29463 (2026-10-03).
+                // Backlash discipline, same as the sweep: every landing is made moving DOWN (the direction
+                // every calibration sample was approached from): the − side directly, the + side through an
+                // overshoot of one bracket, and the centre through the sweep's overshoot, so the focuser rests
+                // on the same side of its backlash as the calibration's own best. A straight return would land
+                // the optics a backlash short of 29463 while the counter said 29463 (2026-10-03).
                 var travel = (_travelRange is null ? null : await _travelRange(token).ConfigureAwait(false)) ?? (0, int.MaxValue);
                 var (minusTarget, plusTarget, overshoot) = BracketMoves(startPosition, bracket, settings.StepSize, travel);
+                if (plusTarget <= startPosition || minusTarget >= startPosition) {
+                    // Within a step of a travel stop there is no room for a side: the vertex check would only
+                    // see a degenerate bracket, so say so and let the Classic sweep (travel-clamped) take over.
+                    return await FallBackAsync($"no room for a ±{bracket}-step bracket inside the focuser travel [{travel.Min}, {travel.Max}]",
+                        "bracket_failed", startPosition, restore: false).ConfigureAwait(false);
+                }
                 var minusPosition = await _focuser.MoveFocuser(minusTarget, token).ConfigureAwait(false);
                 var minus = await TakeSmartShotAsync(2, minusPosition, settings, progress, token).ConfigureAwait(false);
                 // The + side is entered from above as well, through an overshoot of one bracket, so it is a

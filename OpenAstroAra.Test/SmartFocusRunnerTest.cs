@@ -375,6 +375,25 @@ namespace OpenAstroAra.Test {
         }
 
         [Test]
+        public async Task A_bracket_with_no_room_inside_the_travel_falls_back_to_the_classic_sweep() {
+            // Focus 50 steps below the top of the travel: the + side would have to sit at or below the centre.
+            // Rather than judge a degenerate bracket, Smart hands over to the Classic sweep at once.
+            var rig = Build(realBest: StartPosition, calibration: Calibration(bestPosition: StartPosition),
+                travel: (0, StartPosition + 50));
+            using var _ = rig.Service;
+
+            // Whether the Classic sweep then succeeds in 50 steps of headroom is its own business (a 4 × 100 sweep
+            // there mostly cannot); this test is about the hand-over.
+            await rig.Service.RunAutofocusAsync(NoProgress, CancellationToken.None);
+
+            var fallback = rig.Events.Where(e => e.Type == WsEventCatalog.AutofocusFallbackClassic).ToList();
+            Assert.That(fallback, Has.Count.EqualTo(1));
+            Assert.That(fallback[0].Payload.GetProperty("reason").GetString(), Is.EqualTo("bracket_failed"));
+            Assert.That(rig.Moves.Take(2), Does.Not.Contain(StartPosition - 200), "no bracket shot was taken");
+            Assert.That(rig.Moves.Max(), Is.LessThanOrEqualTo(StartPosition + 50), "never past the travel");
+        }
+
+        [Test]
         public void BracketMoves_clamp_to_the_travel() {
             Assert.That(AutofocusSweepService.BracketMoves(1000, 200, 100, (0, int.MaxValue)), Is.EqualTo((800, 1200, 1400)), "unbounded: ± bracket, overshoot one bracket further");
             Assert.That(AutofocusSweepService.BracketMoves(1000, 200, 100, (0, 1250)), Is.EqualTo((800, 1150, 1250)), "near the top: + side one step below the stop, overshoot at the stop");
