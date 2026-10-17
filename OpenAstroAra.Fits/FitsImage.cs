@@ -95,6 +95,8 @@ public sealed class FitsImage : IDisposable {
     }
 
     /// <summary>Open an existing FITS file for reading or read-write.</summary>
+    /// <remarks>The path is taken literally (ffdkopn): CFITSIO extended syntax such as
+    /// <c>file.fits[1]</c>, a <c>!</c> clobber prefix or URL forms is not parsed.</remarks>
     public static FitsImage Open(string path, FitsOpenMode mode = FitsOpenMode.ReadOnly) {
         var status = 0;
         if (CFitsIO.OpenFile(out var fptr, path, (int)mode, ref status) != 0) {
