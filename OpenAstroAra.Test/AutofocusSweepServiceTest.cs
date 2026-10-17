@@ -1540,7 +1540,7 @@ namespace OpenAstroAra.Test {
         }
 
         /// <summary>Width of a baseline JPEG, read from its SOF0 marker.</summary>
-        private static int JpegWidth(ReadOnlySpan<byte> jpeg) {
+        internal static int JpegWidth(ReadOnlySpan<byte> jpeg) {
             for (var i = 2; i + 8 < jpeg.Length; i++) {
                 if (jpeg[i] == 0xFF && (jpeg[i + 1] == 0xC0 || jpeg[i + 1] == 0xC2)) {
                     return (jpeg[i + 7] << 8) | jpeg[i + 8];
