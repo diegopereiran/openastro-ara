@@ -46,6 +46,14 @@ class GuiderLive {
   /// guide counts — Loop there would throw away the paused session.
   bool get isBusy => appState != null && appState != 'Stopped';
 
+  /// A guide session is running (or calibrating, or hunting a lost star):
+  /// Stop ends guiding, not just the picture.
+  bool get isGuidingPhase =>
+      appState == 'Guiding' ||
+      appState == 'Calibrating' ||
+      appState == 'LostLock' ||
+      appState == 'Paused';
+
   bool get isActive =>
       appState != null && appState != 'Stopped' && appState != 'Paused';
 

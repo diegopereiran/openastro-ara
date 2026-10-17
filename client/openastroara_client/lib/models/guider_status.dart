@@ -44,6 +44,18 @@ enum GuiderRuntimeState {
   unknown,
 }
 
+/// The phases a "Stop guiding" ends; in every other one (stopped, looping, a
+/// star picked or lost) the way forward is "Guide".
+bool guiderIsGuiding(GuiderRuntimeState state) => switch (state) {
+      GuiderRuntimeState.calibrating ||
+      GuiderRuntimeState.guiding ||
+      GuiderRuntimeState.settling ||
+      GuiderRuntimeState.dithering ||
+      GuiderRuntimeState.paused =>
+        true,
+      _ => false,
+    };
+
 /// #1364 item 6 — the one wording of a guider phase, used by the guiding
 /// strip, the guider dialog and the Run tab alike.
 String guiderRuntimeText(GuiderRuntimeState state) => switch (state) {

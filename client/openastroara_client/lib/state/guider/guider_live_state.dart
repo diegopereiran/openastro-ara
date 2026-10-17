@@ -9,6 +9,7 @@ import '../../models/server.dart';
 import '../../services/guider_live_api.dart';
 import '../focus/autofocus_live_state.dart' show describeRequestError;
 import '../saved_server_state.dart';
+import 'guider_state.dart';
 
 /// Builds a [GuiderLiveClient] for a server. Overridable in tests.
 final guiderLiveApiFactoryProvider =
@@ -138,6 +139,11 @@ class GuiderLiveNotifier extends Notifier<GuiderLiveState> {
 
   Future<void> loop() => _act((api) => api.loop());
   Future<void> stop() => _act((api) => api.stop());
+
+  /// Guide on the locked star (or the guider's own pick) — through the
+  /// guider's start, the same as the strip's Guide button.
+  Future<void> guide() =>
+      _act((_) => ref.read(guiderStatusProvider.notifier).startGuiding());
   Future<void> selectStar(double x, double y) =>
       _act((api) => api.selectStar(x, y));
   Future<void> deselectStar() => _act((api) => api.deselectStar());

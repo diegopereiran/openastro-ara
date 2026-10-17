@@ -15,13 +15,20 @@ abstract interface class GuiderClient {
   Future<GuiderStatus?> getStatus();
   Future<void> connect({String host, int port});
   Future<void> disconnect();
+
+  /// Start guiding by hand (the daemon picks a star, calibrates if needed and
+  /// settles). 202-Accepted.
+  Future<void> startGuiding();
+
+  /// Stop guiding (the guider stops its exposures too). 202-Accepted.
+  Future<void> stopGuiding();
   void close();
 }
 
 /// Client wrapper around the §63 guider equipment surface
 /// (`/api/v1/equipment/guider`). Drives the daemon's OpenAstro Guider client: read status,
-/// connect/disconnect, and (start/stop/dither for a later slice). The daemon's
-/// connect/disconnect are 202-Accepted (the work runs in the background and the
+/// connect/disconnect and start/stop guiding. The daemon's
+/// connect/disconnect/start/stop are 202-Accepted (the work runs in the background and the
 /// state transition surfaces via `GET` / WS), so these return when the request
 /// is accepted, not when the guider is fully connected.
 class GuiderApi implements GuiderClient {
@@ -68,6 +75,16 @@ class GuiderApi implements GuiderClient {
   @override
   Future<void> disconnect() async {
     await _dio.post<void>('/api/v1/equipment/guider/disconnect');
+  }
+
+  @override
+  Future<void> startGuiding() async {
+    await _dio.post<void>('/api/v1/equipment/guider/start');
+  }
+
+  @override
+  Future<void> stopGuiding() async {
+    await _dio.post<void>('/api/v1/equipment/guider/stop');
   }
 
   /// Releases the underlying Dio's connection pool. Call when the API is

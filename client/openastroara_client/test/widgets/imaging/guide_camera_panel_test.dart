@@ -6,9 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openastroara/models/guider_calibration_view.dart';
 import 'package:openastroara/models/guider_live.dart';
+import 'package:openastroara/models/guider_status.dart';
 import 'package:openastroara/models/server.dart';
+import 'package:openastroara/services/guider_api.dart';
 import 'package:openastroara/services/guider_live_api.dart';
 import 'package:openastroara/state/guider/guider_live_state.dart';
+import 'package:openastroara/state/guider/guider_state.dart';
 import 'package:openastroara/state/saved_server_state.dart';
 import 'package:openastroara/widgets/imaging/guide_calibration_panel.dart';
 import 'package:openastroara/widgets/imaging/guide_camera_panel.dart';
@@ -53,6 +56,41 @@ class _FakeLive implements GuiderLiveClient {
   Future<void> clearCalibration() async => calls.add('clear_calibration');
   @override
   void close() {}
+}
+
+/// Records the guider's start (the panel's Guide button).
+class _FakeGuider implements GuiderClient {
+  int starts = 0;
+  @override
+  Future<GuiderStatus?> getStatus() async => null;
+  @override
+  Future<void> startGuiding() async => starts++;
+  @override
+  void close() {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+Future<void> _pumpPanel(WidgetTester t, _FakeLive fake, {_FakeGuider? guider}) async {
+  await t.pumpWidget(
+    ProviderScope(
+      overrides: [
+        activeServerProvider.overrideWithValue(
+          const AraServer(hostname: 'localhost', port: 5555),
+        ),
+        guiderLiveApiFactoryProvider.overrideWithValue((_) => fake),
+        guiderApiFactoryProvider.overrideWithValue((_) => guider ?? _FakeGuider()),
+      ],
+      child: const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(width: 1000, height: 600, child: GuideCameraPanel()),
+        ),
+      ),
+    ),
+  );
+  await t.pump();
+  await t.pump();
 }
 
 GuiderLive _looping() => GuiderLive.fromJson({
@@ -104,7 +142,7 @@ void main() {
     );
   });
 
-  testWidgets('a paused guide offers Stop, not Loop', (t) async {
+  testWidgets('a paused guide offers Stop guiding, not Loop', (t) async {
     final fake = _FakeLive(
       GuiderLive.fromJson({'connected': true, 'app_state': 'Paused'}),
     );
@@ -134,10 +172,45 @@ void main() {
     );
     expect(
       t
-          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Stop'))
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Stop guiding'))
           .onPressed,
       isNotNull,
     );
+  });
+
+  // 2026-10-17: the panel's "Stop" quietly ended a run's guiding, and
+  // nothing in the client could start it again.
+  testWidgets('while guiding, Stop says Stop guiding and Guide is off', (t) async {
+    final fake = _FakeLive(
+      GuiderLive.fromJson({'connected': true, 'app_state': 'Guiding'}),
+    );
+    await _pumpPanel(t, fake);
+    expect(find.descendant(
+      of: find.byKey(const Key('guide-camera-stop')),
+      matching: find.text('Stop guiding'),
+    ), findsOneWidget);
+    expect(
+      t.widget<FilledButton>(find.byKey(const Key('guide-camera-guide'))).onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('a stopped guider can Guide again from the panel', (t) async {
+    final fake = _FakeLive(
+      GuiderLive.fromJson({'connected': true, 'app_state': 'Stopped'}),
+    );
+    final guider = _FakeGuider();
+    await _pumpPanel(t, fake, guider: guider);
+    expect(find.descendant(
+      of: find.byKey(const Key('guide-camera-stop')),
+      matching: find.text('Stop'),
+    ), findsOneWidget);
+
+    await t.tap(find.byKey(const Key('guide-camera-guide')));
+    await t.pump();
+    await t.pump();
+
+    expect(guider.starts, 1);
   });
 
   test('frame pixels map onto a BoxFit.contain picture', () {

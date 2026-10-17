@@ -68,6 +68,11 @@ class _FakeGuiderApi implements GuiderClient {
       {String host = kDefaultGuiderHost, int port = kDefaultGuiderPort}) async {}
   @override
   Future<void> disconnect() async {}
+  final calls = <String>[];
+  @override
+  Future<void> startGuiding() async => calls.add('startGuiding');
+  @override
+  Future<void> stopGuiding() async => calls.add('stopGuiding');
 }
 
 const _server = AraServer(hostname: 'h', port: 5555);
@@ -127,8 +132,9 @@ Future<ProviderContainer> _pump(WidgetTester tester,
     ProfileApi? profileApi,
     Stream<WsEvent>? ws,
     GuiderEquipmentClient? equipment,
+    _FakeGuiderApi? guider,
     double graphHeight = GuidingStrip.defaultGraphHeight}) async {
-  final api = _FakeGuiderApi()..status = status;
+  final api = (guider ?? _FakeGuiderApi())..status = status;
   final equipmentClient = equipment ?? _RecordingEquipmentClient();
   final container = ProviderContainer(overrides: [
     savedServerServiceProvider.overrideWithValue(
@@ -176,6 +182,51 @@ Future<void> _teardownPanel(WidgetTester tester, ProviderContainer c) async {
 }
 
 void main() {
+  // 2026-10-17: guiding stopped from the guide camera's Stop had no way back
+  // short of a run's Start Guiding step.
+  for (final (state, label, call) in <(GuiderRuntimeState, String, String)>[
+    (GuiderRuntimeState.stopped, 'Guide', 'startGuiding'),
+    (GuiderRuntimeState.starSelected, 'Guide', 'startGuiding'),
+    (GuiderRuntimeState.starLost, 'Guide', 'startGuiding'),
+    (GuiderRuntimeState.guiding, 'Stop guiding', 'stopGuiding'),
+    (GuiderRuntimeState.settling, 'Stop guiding', 'stopGuiding'),
+  ]) {
+    testWidgets('a ${state.name} guider offers $label on the strip header',
+        (tester) async {
+      final guider = _FakeGuiderApi();
+      final container = await _pump(tester,
+          guider: guider,
+          status: GuiderStatus(
+            name: 'OpenAstro Guider',
+            connectionState: GuiderConnectionState.connected,
+            runtimeState: state,
+          ));
+      final button = find.byKey(const Key('guide-toggle-button'));
+      expect(find.descendant(of: button, matching: find.text(label)),
+          findsOneWidget);
+
+      await tester.tap(button);
+      await tester.pump();
+      await tester.pump();
+
+      expect(guider.calls, [call]);
+      expect(container.read(guidingStripExpandedProvider), isTrue,
+          reason: 'the button must not also toggle the strip');
+      await _teardownPanel(tester, container);
+    });
+  }
+
+  testWidgets('a disconnected guider shows no Guide button', (tester) async {
+    final container = await _pump(tester,
+        status: const GuiderStatus(
+          name: 'OpenAstro Guider',
+          connectionState: GuiderConnectionState.disconnected,
+          runtimeState: GuiderRuntimeState.stopped,
+        ));
+    expect(find.byKey(const Key('guide-toggle-button')), findsNothing);
+    await _teardownPanel(tester, container);
+  });
+
   testWidgets('open by default: header shows the guider state and em-dash '
       'RMS when not guiding; the graph says so; the header tap collapses it',
       (tester) async {
