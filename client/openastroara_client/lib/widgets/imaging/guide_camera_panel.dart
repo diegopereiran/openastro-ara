@@ -14,8 +14,8 @@ import 'guider_advanced_dialog.dart';
 /// #1364 (epic item 1) — the guide camera's own picture from Ara: what the
 /// guider is looping on, the star it locked (cross + search box), the other
 /// stars it found (rings; multi-star secondaries), the last guide frame's SNR
-/// and mass. Tap a star to lock on it; Loop / Stop / Deselect are the guider's
-/// own buttons. Opened from the Live tab's guiding strip.
+/// and mass. Tap a star to lock on it; Loop / Guide / Stop / Deselect are the
+/// guider's own buttons. Opened from the Live tab's guiding strip.
 Future<void> showGuideCameraDialog(BuildContext context) => showDialog<void>(
   context: context,
   builder: (_) => const Dialog(
@@ -128,11 +128,25 @@ class GuideCameraPanel extends ConsumerWidget {
               ),
               const SizedBox(width: 8),
               FilledButton.tonalIcon(
+                key: const Key('guide-camera-guide'),
+                onPressed: !live.connected ||
+                        state.busy ||
+                        (live.isGuidingPhase && live.appState != 'LostLock')
+                    ? null
+                    : () => unawaited(notifier.guide()),
+                icon: const Icon(Icons.play_arrow, size: 16),
+                label: const Text('Guide'),
+              ),
+              const SizedBox(width: 8),
+              // While guiding, Stop ends guiding — say so (2026-10-17: it
+              // read "Stop" and quietly ended a run's guiding).
+              FilledButton.tonalIcon(
+                key: const Key('guide-camera-stop'),
                 onPressed: !live.connected || state.busy || !live.isBusy
                     ? null
                     : () => unawaited(notifier.stop()),
                 icon: const Icon(Icons.stop, size: 16),
-                label: const Text('Stop'),
+                label: Text(live.isGuidingPhase ? 'Stop guiding' : 'Stop'),
               ),
               const SizedBox(width: 8),
               TextButton.icon(

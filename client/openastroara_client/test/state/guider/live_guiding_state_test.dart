@@ -30,6 +30,10 @@ class _FakeGuiderApi implements GuiderClient {
       {String host = kDefaultGuiderHost, int port = kDefaultGuiderPort}) async {}
   @override
   Future<void> disconnect() async {}
+  @override
+  Future<void> startGuiding() async {}
+  @override
+  Future<void> stopGuiding() async {}
 }
 
 const _guiding = GuiderStatus(

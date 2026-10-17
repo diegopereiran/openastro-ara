@@ -72,6 +72,20 @@ class _FakeGuiderApi implements GuiderClient {
       runtimeState: GuiderRuntimeState.stopped,
     );
   }
+  final guideCalls = <String>[];
+  Object? throwOnGuide;
+
+  @override
+  Future<void> startGuiding() async {
+    guideCalls.add('start');
+    if (throwOnGuide != null) throw throwOnGuide!;
+  }
+
+  @override
+  Future<void> stopGuiding() async {
+    guideCalls.add('stop');
+    if (throwOnGuide != null) throw throwOnGuide!;
+  }
 }
 
 /// Serves the profile's phd2 section — the remote-OpenAstro Guider case.
@@ -242,6 +256,48 @@ void main() {
       await c.read(guiderStatusProvider.notifier).disconnect();
 
       expect(c.read(guiderStatusProvider).hasError, isTrue);
+    });
+
+    test('start and stop guiding reach the daemon and keep the status on screen',
+        () async {
+      final api = _FakeGuiderApi()
+        ..status = const GuiderStatus(
+          deviceId: 'phd2',
+          name: 'OpenAstro Guider',
+          connectionState: GuiderConnectionState.connected,
+          runtimeState: GuiderRuntimeState.stopped,
+        );
+      final c = _container(const [server], api);
+      await c.read(savedServersProvider.future);
+      await c.read(guiderStatusProvider.future);
+      final notifier = c.read(guiderStatusProvider.notifier);
+
+      final start = notifier.startGuiding();
+      expect(c.read(guiderStatusProvider).isLoading, isFalse,
+          reason: 'the strip must not blank while a start settles');
+      await start;
+      await notifier.stopGuiding();
+
+      expect(api.guideCalls, ['start', 'stop']);
+    });
+
+    test('a refused start throws to the caller and leaves the status alone',
+        () async {
+      final api = _FakeGuiderApi()
+        ..status = const GuiderStatus(
+          deviceId: 'phd2',
+          name: 'OpenAstro Guider',
+          connectionState: GuiderConnectionState.connected,
+          runtimeState: GuiderRuntimeState.stopped,
+        )
+        ..throwOnGuide = StateError('guider is not connected');
+      final c = _container(const [server], api);
+      await c.read(savedServersProvider.future);
+      await c.read(guiderStatusProvider.future);
+
+      await expectLater(
+          c.read(guiderStatusProvider.notifier).startGuiding(), throwsStateError);
+      expect(c.read(guiderStatusProvider).hasValue, isTrue);
     });
   });
 }

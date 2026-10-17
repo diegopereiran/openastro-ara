@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/guider_status.dart';
 import '../../models/pa_residual.dart';
+import '../../state/focus/autofocus_live_state.dart' show describeRequestError;
 import '../../state/guider/guide_graph_settings.dart';
 import '../../state/guider/guide_replay_state.dart';
 import '../../state/guider/guide_step_state.dart';
@@ -146,6 +147,9 @@ class GuidingStrip extends ConsumerWidget {
                     const SizedBox(width: 10),
                     const _LegendDot(color: AraColors.accentError, label: 'Dec'),
                     const SizedBox(width: 8),
+                  ],
+                  if (status?.isConnected ?? false) ...[
+                    _GuideButton(status: status!),
                   ],
                   IconButton(
                     key: const Key('guide-camera-button'),
@@ -933,4 +937,52 @@ class GuideGraphPainter extends CustomPainter {
       old.model.settings != model.settings ||
       old.model.fallbackScale != model.fallbackScale ||
       old.labelStyle != labelStyle;
+}
+
+/// Guide / Stop guiding on the strip header. Guiding stopped by hand — or by
+/// the guide camera's Stop — used to have no way back short of a run's Start
+/// Guiding step (2026-10-17).
+class _GuideButton extends ConsumerStatefulWidget {
+  final GuiderStatus status;
+  const _GuideButton({required this.status});
+
+  @override
+  ConsumerState<_GuideButton> createState() => _GuideButtonState();
+}
+
+class _GuideButtonState extends ConsumerState<_GuideButton> {
+  bool _busy = false;
+
+  Future<void> _run(bool guiding) async {
+    setState(() => _busy = true);
+    final notifier = ref.read(guiderStatusProvider.notifier);
+    try {
+      await (guiding ? notifier.stopGuiding() : notifier.startGuiding());
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
+          content: Text(
+              '${guiding ? 'Stop guiding' : 'Guide'} failed: ${describeRequestError(e)}')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final guiding = guiderIsGuiding(widget.status.runtimeState);
+    return TextButton.icon(
+      key: const Key('guide-toggle-button'),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: Theme.of(context).textTheme.bodySmall,
+      ),
+      onPressed: _busy ? null : () => _run(guiding),
+      icon: Icon(guiding ? Icons.stop : Icons.play_arrow, size: 16),
+      label: Text(guiding ? 'Stop guiding' : 'Guide'),
+    );
+  }
 }

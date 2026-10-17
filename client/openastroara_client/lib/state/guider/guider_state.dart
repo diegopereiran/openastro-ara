@@ -107,6 +107,31 @@ class GuiderStatusNotifier extends AsyncNotifier<GuiderStatus?> {
     await refresh(api);
   }
 
+  bool _guideActionInFlight = false;
+
+  /// Start guiding by hand — the way back after guiding was stopped, with or
+  /// without a run. Throws when the daemon refuses, for the caller to show.
+  Future<void> startGuiding() => _guideAction((api) => api.startGuiding());
+
+  /// Stop guiding by hand. Throws when the daemon refuses.
+  Future<void> stopGuiding() => _guideAction((api) => api.stopGuiding());
+
+  // Unlike connect, keeps the current status on screen (no loading state):
+  // the strip must not blank while a start settles.
+  Future<void> _guideAction(Future<void> Function(GuiderClient api) op) async {
+    if (_guideActionInFlight) return;
+    final api = ref.read(guiderApiProvider);
+    if (api == null) return;
+    _guideActionInFlight = true;
+    try {
+      await op(api);
+    } finally {
+      _guideActionInFlight = false;
+    }
+    if (!ref.mounted) return;
+    await refresh(api);
+  }
+
   /// Re-read status. [client] pins the read to a specific [GuiderClient] (used
   /// by connect/disconnect so a mid-action server switch can't redirect the
   /// follow-up read); when omitted it reads the current active client.

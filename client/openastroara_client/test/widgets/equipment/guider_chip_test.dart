@@ -44,6 +44,10 @@ class _FakeGuiderClient implements GuiderClient {
   @override
   Future<void> disconnect() async => disconnectCalls++;
   @override
+  Future<void> startGuiding() async {}
+  @override
+  Future<void> stopGuiding() async {}
+  @override
   void close() {}
 }
 
