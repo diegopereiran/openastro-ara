@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../ws/ws_providers.dart';
+import '../saved_server_state.dart';
 import 'guider_live_state.dart';
 import 'guider_state.dart';
 
@@ -237,6 +238,20 @@ class GuideStepNotifier extends Notifier<List<GuideStep>> {
       final isNow = next.asData?.value?.isConnected ?? false;
       if (!was && isNow) unawaited(seedFromHistory());
     });
+    // Review of #1387: another server's graph is another guider's night. The
+    // steps are dropped and the new server's history asked for; a seed that
+    // was in flight for the old server lands on nothing (clear() bumps the
+    // generation it checks). The seed waits a microtask: inside the change
+    // notification the live API provider still answers for the old server.
+    ref.listen(activeServerProvider, (prev, next) {
+      if (prev == next) return;
+      clear();
+      // An old server's seed still in flight must not satisfy the single-flight
+      // guard: its result is dropped by clear(), so the new server needs its
+      // own fetch.
+      _seeding = null;
+      Future<void>.microtask(seedFromHistory);
+    });
     Future<void>.microtask(seedFromHistory);
     return const [];
   }
@@ -250,7 +265,16 @@ class GuideStepNotifier extends Notifier<List<GuideStep>> {
   /// steps: if any arrived first, the history is not needed. Single-flight —
   /// the start-up seed and the on-connect seed can both ask at once.
   /// Best-effort.
-  Future<void> seedFromHistory() => _seeding ??= _seed().whenComplete(() => _seeding = null);
+  Future<void> seedFromHistory() {
+    if (_seeding case final pending?) return pending;
+    late final Future<void> run;
+    // Clears only its own slot: a server switch may have replaced it with the
+    // new server's seed, which must stay single-flight (review of #1389).
+    run = _seed().whenComplete(() {
+      if (identical(_seeding, run)) _seeding = null;
+    });
+    return _seeding = run;
+  }
 
   Future<void> _seed() async {
     final api = ref.read(guiderLiveApiProvider);

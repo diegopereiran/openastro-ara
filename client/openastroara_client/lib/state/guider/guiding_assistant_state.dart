@@ -14,6 +14,33 @@ final guidingAssistantApiFactoryProvider =
       (ref) => GuidingAssistantApi.new,
     );
 
+/// The suggestion keys Accept wrote on the last completed run. Root-scoped
+/// (the dialog's own state is autoDispose) so closing and reopening the
+/// dialog keeps the "· applied" marks and does not re-tick what was already
+/// written; a new Start clears it (review of #1387).
+class GuidingAssistantAppliedNotifier extends Notifier<List<String>> {
+  @override
+  List<String> build() {
+    // A different server has a different guider: nothing applied there yet.
+    ref.watch(activeServerProvider);
+    return const [];
+  }
+
+  /// Record what Accept wrote, unless the active server changed while the
+  /// write was in flight: server A's keys must not mark server B's run.
+  void set(List<String> keys, {required AraServer? writtenTo}) {
+    if (writtenTo != ref.read(activeServerProvider)) return;
+    state = keys;
+  }
+
+  void clear() => state = const [];
+}
+
+final guidingAssistantAppliedProvider =
+    NotifierProvider<GuidingAssistantAppliedNotifier, List<String>>(
+      GuidingAssistantAppliedNotifier.new,
+    );
+
 final guidingAssistantApiProvider = Provider<GuidingAssistantClient?>((ref) {
   final server = ref.watch(activeServerProvider);
   if (server == null) return null;
@@ -23,19 +50,18 @@ final guidingAssistantApiProvider = Provider<GuidingAssistantClient?>((ref) {
 });
 
 /// What the Guiding Assistant dialog shows: the guider's status, an in-flight
-/// action, the last error, and what Apply wrote.
+/// action and the last error. What Apply wrote lives in
+/// [guidingAssistantAppliedProvider], which outlives the dialog.
 class GuidingAssistantState {
   final GuidingAssistantStatus status;
   final bool loaded;
   final bool busy;
   final String? error;
-  final List<String> applied;
   const GuidingAssistantState({
     this.status = GuidingAssistantStatus.disconnected,
     this.loaded = false,
     this.busy = false,
     this.error,
-    this.applied = const [],
   });
 
   GuidingAssistantState copyWith({
@@ -43,14 +69,12 @@ class GuidingAssistantState {
     bool? loaded,
     bool? busy,
     String? error,
-    List<String>? applied,
     bool clearError = false,
   }) => GuidingAssistantState(
     status: status ?? this.status,
     loaded: loaded ?? this.loaded,
     busy: busy ?? this.busy,
     error: clearError ? null : (error ?? this.error),
-    applied: applied ?? this.applied,
   );
 }
 
@@ -82,6 +106,11 @@ class GuidingAssistantNotifier extends Notifier<GuidingAssistantState> {
     try {
       final status = await api.getStatus();
       if (!ref.mounted || gen != _generation) return;
+      // A run seen in progress is a new run, whoever started it (another
+      // client, the guider's page): what Accept wrote belongs to the last one.
+      if (status.isRunning) {
+        ref.read(guidingAssistantAppliedProvider.notifier).clear();
+      }
       state = state.copyWith(status: status, loaded: true, clearError: true);
     } catch (e) {
       if (!ref.mounted || gen != _generation) return;
@@ -125,7 +154,7 @@ class GuidingAssistantNotifier extends Notifier<GuidingAssistantState> {
 
   Future<void> start({double? durationSec, required bool measureBacklash}) =>
       _act((api) async {
-        state = state.copyWith(applied: const []);
+        ref.read(guidingAssistantAppliedProvider.notifier).clear();
         return api.start(
           durationSec: durationSec,
           measureBacklash: measureBacklash,
@@ -135,8 +164,12 @@ class GuidingAssistantNotifier extends Notifier<GuidingAssistantState> {
   Future<void> stop() => _act((api) => api.stop());
 
   Future<void> apply(List<String> which) => _act((api) async {
-    final applied = await api.apply(which);
-    if (ref.mounted) state = state.copyWith(applied: applied);
+    // Taken before the await: the marks belong to the root provider, so a
+    // dialog closed while Accept is in flight still records what was written
+    // (this notifier is gone by then, its ref unusable).
+    final marks = ref.read(guidingAssistantAppliedProvider.notifier);
+    final server = ref.read(activeServerProvider);
+    marks.set(await api.apply(which), writtenTo: server);
     return null;
   });
 }
