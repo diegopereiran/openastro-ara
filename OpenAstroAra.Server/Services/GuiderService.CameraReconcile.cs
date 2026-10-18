@@ -12,15 +12,9 @@
 
 #endregion "copyright"
 
-using Microsoft.Extensions.Logging;
 using OpenAstroAra.Equipment.Equipment.MyGuider.PHD2;
-using OpenAstroAra.Server.Contracts;
-using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace OpenAstroAra.Server.Services;
 
