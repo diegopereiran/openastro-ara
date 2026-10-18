@@ -5,7 +5,7 @@ Run from the repo root:
 
     python3 -m unittest discover -s scripts/tests -v
 
-libsofa.so / libnovas31.so are cross-built on ubuntu-latest (glibc 2.39) and
+liberfa.so / libsupernovas.so are cross-built on ubuntu-latest (glibc 2.39) and
 need `fmod@GLIBC_2.38`. Debian Bookworm ships glibc 2.36: the .deb installs,
 dlopen fails, and the boot probe reports the file MISSING although it is on
 disk. The package therefore has to refuse to install there, and every artifact
@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTROL = REPO_ROOT / "packaging" / "debian" / "DEBIAN" / "control.template"
 BUILD_DEB = REPO_ROOT / "packaging" / "build-deb.sh"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
-NATIVES = ("libsofa.so", "libnovas31.so")
+NATIVES = ("liberfa.so", "libsupernovas.so")
 
 
 class Libc6Dependency(unittest.TestCase):
@@ -61,6 +61,31 @@ class NativesGuards(unittest.TestCase):
             any(all(lib in line for lib in NATIVES) for line in copies),
             f"no COPY names both natives: {copies}",
         )
+
+
+class SubmoduleBuildGuards(unittest.TestCase):
+    """#1386: the natives build from third_party/ submodules; three guards keep a
+    checkout without them, or a silently-dropped upstream patch, from producing a
+    daemon with wrong or missing transforms."""
+
+    SCRIPT = REPO_ROOT / "scripts" / "build-astrometry-natives.sh"
+    CSPROJ = REPO_ROOT / "OpenAstroAra.Astrometry" / "OpenAstroAra.Astrometry.csproj"
+
+    def test_script_refuses_an_empty_submodule(self) -> None:
+        text = self.SCRIPT.read_text()
+        self.assertIn('for dir in "$ERFA/src" "$SNOVAS/src/c99"; do', text)
+        self.assertRegex(text, r"git submodule update --init[^\n]*\n\s*exit 2")
+
+    def test_script_patches_remainder_and_fails_when_upstream_fixed_it(self) -> None:
+        text = self.SCRIPT.read_text()
+        self.assertIn("grep -o 'remainder(temp, 1.0)'", text)
+        self.assertIn("sed 's/remainder(temp, 1.0)/fmod(temp, 1.0)/'", text)
+        self.assertRegex(text, r"no longer has the remainder\(\) line[^\n]*\n\s*exit 2")
+
+    def test_csproj_errors_on_a_missing_submodule(self) -> None:
+        text = self.CSPROJ.read_text()
+        self.assertRegex(text, r'<Error Condition="!Exists\(\'\$\(_AstrometrySubmodules\)/erfa/src/erfa\.h\'\)')
+        self.assertIn("git submodule update --init", text)
 
 
 if __name__ == "__main__":

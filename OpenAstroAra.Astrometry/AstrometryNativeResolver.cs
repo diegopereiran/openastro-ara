@@ -20,23 +20,21 @@ using System.Threading;
 namespace OpenAstroAra.Astrometry {
 
     /// <summary>
-    /// §14e — maps the inherited Windows-named astrometry P/Invokes (<c>SOFAlib.dll</c> /
-    /// <c>NOVAS31lib.dll</c>) to the cross-platform binaries built from the vendored C sources by
-    /// <c>scripts/build-astrometry-natives.sh</c> (<c>libsofa</c> / <c>libnovas31</c>). Returning
-    /// <see cref="IntPtr.Zero"/> for anything unmatched (or when the mapped library is absent)
-    /// hands resolution back to the runtime's default probing, so behavior on Windows — and the
-    /// DllNotFoundException surface on hosts without the natives — is unchanged.
+    /// §14e — loads the astrometry natives (<c>liberfa</c>, <c>libsupernovas</c>) from the
+    /// assembly's own directory, where the build stages them. The P/Invokes carry
+    /// <c>DllImportSearchPath.SafeDirectories</c> (CA5393), which on Linux does NOT include the
+    /// assembly directory: without this resolver the runtime probed
+    /// <c>runtimes/linux-x64/native/supernovas.so</c> and the shared-framework directory, found
+    /// nothing, and every transform threw DllNotFoundException while the boot probe (which
+    /// loads with the default search path) said the libraries were present (PR #1390 CI).
+    /// Returning <see cref="IntPtr.Zero"/> for anything else hands resolution back to the runtime.
     /// </summary>
     internal static class AstrometryNativeResolver {
 
         private static int _registered;
 
-        /// <summary>
-        /// Idempotent — called from the static constructors of the P/Invoke wrapper classes
-        /// (<see cref="SOFA"/>, <see cref="NOVAS"/>) so it is guaranteed to run before their first
-        /// native call. SetDllImportResolver throws on a second registration for the same
-        /// assembly, hence the guard.
-        /// </summary>
+        /// <summary>Idempotent — called from the static constructors of <see cref="SOFA"/> and
+        /// <see cref="NOVAS"/>; SetDllImportResolver throws on a second registration.</summary>
         internal static void Register() {
             if (Interlocked.Exchange(ref _registered, 1) == 1) {
                 return;
@@ -45,17 +43,13 @@ namespace OpenAstroAra.Astrometry {
         }
 
         private static IntPtr Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath) {
-            if (OperatingSystem.IsWindows()) {
-                return IntPtr.Zero; // Windows keeps the inherited SOFA/NOVAS DLL probing untouched
-            }
             return libraryName switch {
-                "SOFAlib.dll" => TryLoad("sofa", assembly),
-                "NOVAS31lib.dll" => TryLoad("novas31", assembly),
+                // searchPath null = the assembly's default, which includes its own directory —
+                // the same call AstrometryNatives.Probe makes, so probe and P/Invoke agree.
+                "erfa" or "supernovas" =>
+                    NativeLibrary.TryLoad(libraryName, assembly, searchPath: null, out var handle) ? handle : IntPtr.Zero,
                 _ => IntPtr.Zero,
             };
         }
-
-        private static IntPtr TryLoad(string name, Assembly assembly) =>
-            NativeLibrary.TryLoad(name, assembly, searchPath: null, out var handle) ? handle : IntPtr.Zero;
     }
 }
