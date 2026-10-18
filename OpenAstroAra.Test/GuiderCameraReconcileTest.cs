@@ -99,7 +99,8 @@ namespace OpenAstroAra.Test {
             public Mock<IAlpacaManagementClient> Alpaca = new();
 
             public static async Task<Rig> StartAsync(string pinnedId, double pixelSize, Func<JsonNode?, JsonNode?>? pixelRpc,
-                    IReadOnlyDictionary<string, AlpacaConfiguredDevice>? devices) {
+                    IReadOnlyDictionary<string, AlpacaConfiguredDevice>? devices,
+                    DiscoveredDeviceDto? mainCamera = null) {
                 var rig = new Rig { Fake = FakeGuider.Start() };
                 rig.Fake.SetOnConnectEvents(PhdEvents.Version(subver: "openastroara-fake"), PhdEvents.AppState("Stopped"));
                 rig.Fake.OnRpc("get_alpaca_camera_pixelsize", req => pixelRpc is null
@@ -117,7 +118,8 @@ namespace OpenAstroAra.Test {
                 rig.Profiles = new StoreBackedProfileService(rig.Store);
                 rig.Svc = new GuiderService(rig.Profiles, new GuiderRecoveryCoordinator(Mock.Of<IGuiderProcessSupervisor>(),
                         Mock.Of<INotificationService>(), Mock.Of<IDiagnosticsService>(), NullLogger<GuiderRecoveryCoordinator>.Instance),
-                    rig.Log, Mock.Of<IGuiderProcessSupervisor>(), profileStore: rig.Store, alpaca: rig.Alpaca.Object);
+                    rig.Log, Mock.Of<IGuiderProcessSupervisor>(), profileStore: rig.Store, alpaca: rig.Alpaca.Object,
+                    mainCameraResolver: () => mainCamera);
                 await rig.Svc.ConnectAsync(new GuiderConnectRequestDto("localhost", rig.Fake.Port), null, CancellationToken.None).ConfigureAwait(false);
                 // The connect and the reconcile run on one background task; wait for the reconcile.
                 var initial = rig.Svc.ReconcileTask;
@@ -189,8 +191,18 @@ namespace OpenAstroAra.Test {
             Assert.That(rig.Stored.GuiderCameraAlpacaUniqueId, Is.EqualTo("TEST_GUIDE_0001"));
             var lines = rig.Log.Reconcile();
             Assert.That(lines, Has.Length.EqualTo(1));
-            Assert.That(lines[0], Does.Contain("TEST_GUIDE_0002").And.Contain("TEST_GUIDE_0001"));
+            Assert.That(lines[0], Does.Contain("reports UniqueID 'TEST_GUIDE_0002' but the profile pins 'TEST_GUIDE_0001'"));
             Assert.That(rig.State, Is.EqualTo(EquipmentConnectionState.Connected));
+        }
+
+        [Test]
+        public async Task Connect_learns_nothing_when_the_slot_is_the_main_imaging_camera() {
+            var main = new DiscoveredDeviceDto("TEST_MAIN_0001", "Test Imaging Camera", DeviceType.Camera,
+                "192.0.2.10", "192.0.2.10", 6800, 1, false);
+            await using var rig = await Rig.StartAsync("", 3.75, _ => Size(5.9), Slot("TEST_MAIN_0001"), main).ConfigureAwait(false);
+            Assert.That(rig.Stored.GuidePixelSize, Is.EqualTo(3.75));
+            Assert.That(rig.Stored.GuiderCameraAlpacaUniqueId, Is.EqualTo(""));
+            Assert.That(rig.Log.Reconcile(), Is.Empty);
         }
     }
 }

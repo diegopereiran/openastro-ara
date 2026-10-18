@@ -57,6 +57,12 @@ public sealed partial class GuiderService {
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 // The client already maps failures to an empty map; a throwing stand-in means the same: unknown.
             }
+            // The slot resolves to the main imaging camera (a renumber): its id and pixel size are not the
+            // guide camera's, so learn nothing. The push refuses this selection with its own reason (#1308).
+            if (_mainCameraResolver?.Invoke() is { } main
+                && GuiderCameraPinCheck.Describe(settings, devices, main) is not null) {
+                return;
+            }
             double? read = null;
             try {
                 read = await guider.GetAlpacaCameraPixelSizeAsync(ep.Host, ep.Port, ep.Device, cts.Token).ConfigureAwait(false);
@@ -71,7 +77,7 @@ public sealed partial class GuiderService {
                 var slotId = devices.TryGetValue(GuiderCameraReconcile.SlotKey(ep.Device), out var d) ? d.UniqueId : "";
                 var pinText = GuiderCameraReconcile.ForLog(pinnedId);
                 var slotText = GuiderCameraReconcile.ForLog(slotId);
-                LogGuideCameraPinMismatch(endpoint, pinText, slotText);
+                LogGuideCameraPinMismatch(endpoint, slotText, pinText);
                 return;
             }
             if (decision.Outcome != GuiderCameraReconcileOutcome.Update) {
@@ -106,7 +112,7 @@ public sealed partial class GuiderService {
             return true;
         }
         var now = _profileStore.GetPhd2Settings();
-        if (now.GuiderCamera != camera || now.GuiderCameraAlpacaUniqueId != pinnedId) {
+        if (now.GuiderCamera.Trim() != camera || now.GuiderCameraAlpacaUniqueId.Trim() != pinnedId) {
             return false;
         }
         _profileStore.PutPhd2Settings(now with {
@@ -122,7 +128,7 @@ public sealed partial class GuiderService {
 
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "Guide camera {Endpoint} reports UniqueID '{SlotUniqueId}' but the profile pins '{PinnedUniqueId}': profile left unchanged, pick the guide camera again (#1308, #1362)")]
-    private partial void LogGuideCameraPinMismatch(string endpoint, string pinnedUniqueId, string slotUniqueId);
+    private partial void LogGuideCameraPinMismatch(string endpoint, string slotUniqueId, string pinnedUniqueId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Guide camera re-read on connect failed; profile left unchanged (#1362)")]
     private partial void LogGuideCameraReconcileFailed(Exception ex);
