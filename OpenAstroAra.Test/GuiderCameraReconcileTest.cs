@@ -195,6 +195,7 @@ namespace OpenAstroAra.Test {
             var lines = rig.Log.Reconcile();
             Assert.That(lines, Has.Length.EqualTo(1));
             Assert.That(lines[0], Does.Contain("reports UniqueID 'TEST_GUIDE_0002' but the profile pins 'TEST_GUIDE_0001'"));
+            Assert.That(rig.Fake.ReceivedMethods, Does.Not.Contain("get_alpaca_camera_pixelsize"), "a mismatched slot is never read");
             Assert.That(rig.State, Is.EqualTo(EquipmentConnectionState.Connected));
         }
 
