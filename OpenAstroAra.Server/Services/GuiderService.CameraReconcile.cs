@@ -25,8 +25,12 @@ public sealed partial class GuiderService {
 
     private static readonly TimeSpan ReconcileTimeout = TimeSpan.FromSeconds(10);
 
-    // The last reconcile, for tests to await; the connect itself never waits on it.
+    // The last reconcile and how many have started, for tests to await; the connect itself never waits on it.
+    // A reconcile that finishes synchronously returns the cached completed task, so a test cannot tell a
+    // new one from the initial value by reference: it waits for the count instead.
+    private int _reconcileStarts;
     internal Task ReconcileTask { get; private set; } = Task.CompletedTask;
+    internal int ReconcileStarts => Volatile.Read(ref _reconcileStarts);
 
     /// <summary>The connect hook: called by <c>ConnectInBackground</c> after the guider reached Connected.
     /// Also runs on a §63.3 recovery reconnect, which is the same event for the camera.</summary>
@@ -51,6 +55,17 @@ public sealed partial class GuiderService {
             } catch (Exception ex) when (ex is not OperationCanceledException) {
                 // The client already maps failures to an empty map; a throwing stand-in means the same: unknown.
             }
+            var endpoint = $"{GuiderCameraReconcile.ForLog(ep.Host)}:{ep.Port.ToString(CultureInfo.InvariantCulture)}/{ep.Device.ToString(CultureInfo.InvariantCulture)}";
+            // Identity first: a pin mismatch is logged whatever else holds the slot, even the main camera,
+            // and the slot is not read because its size may belong to the other camera.
+            if (GuiderCameraReconcile.Decide(pinnedId, oldPixelSize, ep.Device, devices, readPixelSize: null).Outcome
+                    == GuiderCameraReconcileOutcome.PinMismatch) {
+                var slotId = devices.TryGetValue(GuiderCameraReconcile.SlotKey(ep.Device), out var d) ? d.UniqueId : "";
+                var pinText = GuiderCameraReconcile.ForLog(pinnedId);
+                var slotText = GuiderCameraReconcile.ForLog(slotId);
+                LogGuideCameraPinMismatch(endpoint, slotText, pinText);
+                return;
+            }
             // The slot resolves to the main imaging camera (a renumber): its id and pixel size are not the
             // guide camera's, so learn nothing. The push refuses this selection with its own reason (#1308).
             if (_mainCameraResolver?.Invoke() is { } main
@@ -66,14 +81,6 @@ public sealed partial class GuiderService {
 
             var decision = GuiderCameraReconcile.Decide(pinnedId,
                 oldPixelSize, ep.Device, devices, read);
-            var endpoint = $"{GuiderCameraReconcile.ForLog(ep.Host)}:{ep.Port.ToString(CultureInfo.InvariantCulture)}/{ep.Device.ToString(CultureInfo.InvariantCulture)}";
-            if (decision.Outcome == GuiderCameraReconcileOutcome.PinMismatch) {
-                var slotId = devices.TryGetValue(GuiderCameraReconcile.SlotKey(ep.Device), out var d) ? d.UniqueId : "";
-                var pinText = GuiderCameraReconcile.ForLog(pinnedId);
-                var slotText = GuiderCameraReconcile.ForLog(slotId);
-                LogGuideCameraPinMismatch(endpoint, slotText, pinText);
-                return;
-            }
             if (decision.Outcome != GuiderCameraReconcileOutcome.Update) {
                 return;
             }

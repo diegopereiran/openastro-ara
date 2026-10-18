@@ -82,6 +82,11 @@ namespace OpenAstroAra.Test {
             Assert.That(GuiderCameraReconcile.ForLog("ID\r\nforged line"), Is.EqualTo("IDforged line"));
         }
 
+        [Test]
+        public void ForLog_drops_bidi_controls() {
+            Assert.That(GuiderCameraReconcile.ForLog("ID\u202Eevil\u202C \u2066x\u2069 \u200Fy\u200E\u061C"), Is.EqualTo("IDevil x y"));
+        }
+
         // ---- through the service, against the fake guider ----
 
         private sealed class Rig : IAsyncDisposable {
@@ -115,11 +120,14 @@ namespace OpenAstroAra.Test {
                     rig.Log, Mock.Of<IGuiderProcessSupervisor>(), profileStore: rig.Store, alpaca: rig.Alpaca.Object,
                     mainCameraResolver: () => mainCamera);
                 await rig.Svc.ConnectAsync(new GuiderConnectRequestDto("localhost", rig.Fake.Port), null, CancellationToken.None).ConfigureAwait(false);
-                // The connect and the reconcile run on one background task; wait for the reconcile.
-                var initial = rig.Svc.ReconcileTask;
+                // The connect and the reconcile run on one background task; wait for the reconcile to start
+                // (by count: a synchronous one returns the cached completed task), then for it to end.
                 var until = DateTime.UtcNow.AddSeconds(15);
-                while (ReferenceEquals(rig.Svc.ReconcileTask, initial) && DateTime.UtcNow < until) {
-                    await Task.Delay(50).ConfigureAwait(false);
+                while (rig.Svc.ReconcileStarts == 0) {
+                    if (DateTime.UtcNow >= until) {
+                        Assert.Fail("the reconcile never started");
+                    }
+                    await Task.Delay(10).ConfigureAwait(false);
                 }
                 await rig.Svc.ReconcileTask.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(false);
                 return rig;
@@ -143,6 +151,7 @@ namespace OpenAstroAra.Test {
                 lock (Lines) { Lines.Add((logLevel, formatter(state, exception))); }
             }
             public string[] Reconcile() { lock (Lines) { return Lines.Where(l => l.Text.Contains("#1362", StringComparison.Ordinal)).Select(l => l.Text).ToArray(); } }
+            public string[] ReconcileAt(LogLevel level) { lock (Lines) { return Lines.Where(l => l.Level == level && l.Text.Contains("#1362", StringComparison.Ordinal)).Select(l => l.Text).ToArray(); } }
         }
 
         private static JsonObject Size(double v) => new JsonObject { ["pixel_size"] = v };
@@ -186,6 +195,25 @@ namespace OpenAstroAra.Test {
             var lines = rig.Log.Reconcile();
             Assert.That(lines, Has.Length.EqualTo(1));
             Assert.That(lines[0], Does.Contain("reports UniqueID 'TEST_GUIDE_0002' but the profile pins 'TEST_GUIDE_0001'"));
+            Assert.That(rig.State, Is.EqualTo(EquipmentConnectionState.Connected));
+        }
+
+        [Test]
+        public async Task Connect_logs_a_pin_mismatch_while_a_main_camera_is_held() {
+            var main = new DiscoveredDeviceDto("TEST_MAIN_0001", "Test Imaging Camera", DeviceType.Camera,
+                "192.0.2.10", "192.0.2.10", 6800, 0, false);
+            var devices = new Dictionary<string, AlpacaConfiguredDevice> {
+                ["camera/0"] = new("Test Imaging Camera", "TEST_MAIN_0001"),
+                ["camera/1"] = new("Test Guide Camera", "TEST_GUIDE_0002"),
+            };
+            await using var rig = await Rig.StartAsync("TEST_GUIDE_0001", 3.75, _ => Size(2.9), devices, main).ConfigureAwait(false);
+            Assert.That(rig.Stored.GuidePixelSize, Is.EqualTo(3.75));
+            Assert.That(rig.Stored.GuiderCameraAlpacaUniqueId, Is.EqualTo("TEST_GUIDE_0001"));
+            var warnings = rig.Log.ReconcileAt(LogLevel.Warning);
+            Assert.That(warnings, Has.Length.EqualTo(1));
+            Assert.That(warnings[0], Does.Contain("reports UniqueID 'TEST_GUIDE_0002' but the profile pins 'TEST_GUIDE_0001'"));
+            Assert.That(rig.Log.Reconcile(), Has.Length.EqualTo(1));
+            Assert.That(rig.Fake.ReceivedMethods, Does.Not.Contain("get_alpaca_camera_pixelsize"), "a mismatched slot is never read");
             Assert.That(rig.State, Is.EqualTo(EquipmentConnectionState.Connected));
         }
 

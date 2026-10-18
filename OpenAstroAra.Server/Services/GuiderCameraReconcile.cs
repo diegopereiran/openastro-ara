@@ -34,7 +34,9 @@ public readonly record struct GuiderCameraReconcileDecision(GuiderCameraReconcil
 /// the server's <c>configureddevices</c> and applies the result.
 /// <para>The #1308 pin wins: a non-empty pinned id that differs from the slot's UniqueID means the camera
 /// moved or was swapped (<see cref="GuiderCameraPinCheck"/> refuses it on push); nothing is overwritten and
-/// the pixel size is left alone because it may belong to the other camera.</para>
+/// the pixel size is left alone because it may belong to the other camera. That outcome does not depend on
+/// <c>readPixelSize</c>, so the caller decides it before reading the camera, and logs it even while the
+/// main imaging camera is held.</para>
 /// </summary>
 public static class GuiderCameraReconcile {
 
@@ -78,9 +80,14 @@ public static class GuiderCameraReconcile {
     public static string SlotKey(int deviceNumber) =>
         $"camera/{deviceNumber.ToString(CultureInfo.InvariantCulture)}";
 
-    /// <summary>Device text reaches the log: drop control characters (CWE-117) and cap the length.</summary>
+    /// <summary>Device text reaches the log: drop control characters (CWE-117) and bidi controls, which can
+    /// reorder what a reader sees (CVE-2021-42574), and cap the length.</summary>
     public static string ForLog(string? value) {
-        var clean = new string((value ?? string.Empty).Where(c => !char.IsControl(c)).ToArray());
+        var clean = new string((value ?? string.Empty).Where(c => !char.IsControl(c) && !IsBidiControl(c)).ToArray());
         return clean.Length > 128 ? clean[..128] : clean;
     }
+
+    // ALM, LRM/RLM, the embeddings and overrides (U+202A-202E) and the isolates (U+2066-2069).
+    private static bool IsBidiControl(char c) =>
+        c is '\u061C' or '\u200E' or '\u200F' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069');
 }
