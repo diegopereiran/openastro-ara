@@ -9,7 +9,10 @@ abstract interface class GuidingAssistantClient {
   Future<GuidingAssistantStatus> getStatus();
 
   /// Start the measurement: `durationSec` null = the guider's default
-  /// (two minutes); the status returned is the run's first.
+  /// (two minutes); the status returned is the run's first. A slow guider
+  /// can take longer than the other calls to answer (it checks the star and
+  /// the calibration, then switches guide output off), so the daemon waits
+  /// 25 s for it and the client [GuidingAssistantApi.startTimeout].
   Future<GuidingAssistantStatus> start({
     double? durationSec,
     required bool measureBacklash,
@@ -25,16 +28,23 @@ abstract interface class GuidingAssistantClient {
 class GuidingAssistantApi implements GuidingAssistantClient {
   final Dio _dio;
 
-  GuidingAssistantApi(AraServer server)
-    : _dio = Dio(
-        BaseOptions(
-          baseUrl: server.baseUrl,
-          connectTimeout: const Duration(seconds: 3),
-          receiveTimeout: const Duration(seconds: 10),
-        ),
-      );
+  /// [dio] is a test seam; the app passes none and gets [baseOptions].
+  GuidingAssistantApi(AraServer server, {Dio? dio})
+    : _dio = dio ?? Dio(baseOptions(server));
+
+  static BaseOptions baseOptions(AraServer server) => BaseOptions(
+    baseUrl: server.baseUrl,
+    connectTimeout: const Duration(seconds: 3),
+    receiveTimeout: const Duration(seconds: 10),
+  );
 
   static const _base = '/api/v1/equipment/guider/live/assistant';
+
+  /// Review of #1387: a Start that passed the 10 s receive timeout showed an
+  /// error while the run had in fact begun. The daemon's own bound on the
+  /// start RPC is 25 s (PHD2Guider.GuidingAssistantStartTimeoutMs), so its
+  /// refusal always reaches the client before this runs out.
+  static const startTimeout = Duration(seconds: 30);
 
   static GuidingAssistantStatus _parse(dynamic data) =>
       data is Map<String, dynamic>
@@ -53,6 +63,7 @@ class GuidingAssistantApi implements GuidingAssistantClient {
     (await _dio.post<dynamic>(
       '$_base/start',
       data: {'duration_sec': durationSec, 'measure_backlash': measureBacklash},
+      options: Options(receiveTimeout: startTimeout),
     )).data,
   );
 

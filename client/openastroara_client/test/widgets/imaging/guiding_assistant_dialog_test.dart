@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openastroara/models/guider_status.dart';
 import 'package:openastroara/models/guiding_assistant.dart';
 import 'package:openastroara/models/server.dart';
 import 'package:openastroara/services/guiding_assistant_api.dart';
 import 'package:openastroara/state/saved_server_state.dart';
+import 'package:openastroara/state/guider/guider_state.dart';
 import 'package:openastroara/state/guider/guiding_assistant_state.dart';
 import 'package:openastroara/widgets/imaging/guiding_assistant_dialog.dart';
 
@@ -48,9 +53,13 @@ class _Fake implements GuidingAssistantClient {
     return status;
   }
 
+  /// When set, apply waits for it — a write still in flight.
+  Completer<void>? applyGate;
+
   @override
   Future<List<String>> apply(List<String> which) async {
     calls.add('apply ${which.join(',')}');
+    if (applyGate != null) await applyGate!.future;
     return which;
   }
 
@@ -92,26 +101,49 @@ GuidingAssistantStatus _done() => GuidingAssistantStatus.fromJson({
   },
 });
 
-Future<_Fake> _pump(WidgetTester t, GuidingAssistantStatus status) async {
-  final fake = _Fake(status);
+class _GuiderAt extends GuiderStatusNotifier {
+  final GuiderRuntimeState runtime;
+  _GuiderAt(this.runtime);
+  @override
+  Future<GuiderStatus?> build() async => GuiderStatus(
+    name: 'Guider',
+    connectionState: GuiderConnectionState.connected,
+    runtimeState: runtime,
+  );
+}
+
+/// Open the panel. Pass [open] false to leave it closed (the dialog's own
+/// state is autoDispose) and [fake] to reuse a previous pump's guider; with
+/// [shared] the pumps share one ProviderScope, so root-scoped providers (what
+/// Accept applied) survive the panel's close and reopen as in the app.
+Future<_Fake> _pump(
+  WidgetTester t,
+  GuidingAssistantStatus status, {
+  GuiderRuntimeState guider = GuiderRuntimeState.starSelected,
+  _Fake? fake,
+  bool open = true,
+  bool shared = false,
+}) async {
+  fake ??= _Fake(status);
   t.view.physicalSize = const Size(900, 900);
   t.view.devicePixelRatio = 1;
   addTearDown(t.view.resetPhysicalSize);
   addTearDown(t.view.resetDevicePixelRatio);
   await t.pumpWidget(
     ProviderScope(
+      // A fresh scope per pump (new overrides), one shared scope on request.
+      key: shared ? _scope : UniqueKey(),
       overrides: [
-        activeServerProvider.overrideWithValue(
-          const AraServer(hostname: 'localhost', port: 5555),
-        ),
-        guidingAssistantApiFactoryProvider.overrideWithValue((_) => fake),
+        activeServerProvider.overrideWith((ref) => ref.watch(_server)),
+        guidingAssistantApiFactoryProvider.overrideWithValue((_) => fake!),
+        guiderStatusProvider.overrideWith(() => _GuiderAt(guider)),
       ],
-      child: const MaterialApp(
+      child: MaterialApp(
         home: Scaffold(
           body: SizedBox(
             width: 700,
             height: 700,
-            child: GuidingAssistantPanel(),
+            child: open ? const GuidingAssistantPanel() : const SizedBox(),
           ),
         ),
       ),
@@ -121,6 +153,16 @@ Future<_Fake> _pump(WidgetTester t, GuidingAssistantStatus status) async {
   await t.pump();
   return fake;
 }
+
+final _scope = GlobalKey();
+
+/// The active server, switchable from a test through the scope's container.
+final _server = StateProvider<AraServer?>(
+  (_) => const AraServer(hostname: 'localhost', port: 5555),
+);
+
+ProviderContainer _container(WidgetTester t) =>
+    ProviderScope.containerOf(t.element(find.byType(MaterialApp)));
 
 String _text(WidgetTester t, Key key) => t.widget<Text>(find.byKey(key)).data!;
 
@@ -324,4 +366,218 @@ void main() {
       'Measuring drift…',
     );
   });
+
+  testWidgets('Accept finished after the dialog closed still marks applied', (
+    t,
+  ) async {
+    final fake = await _pump(t, _done(), shared: true);
+    final gate = Completer<void>();
+    fake.applyGate = gate;
+    await t.ensureVisible(find.byKey(const Key('guiding-assistant-apply')));
+    await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+    await t.pump();
+    // Close while the write is in flight, then let it finish.
+    await _pump(t, _done(), fake: fake, open: false, shared: true);
+    gate.complete();
+    await t.pump();
+    await _pump(t, _done(), fake: fake, shared: true);
+    expect(find.text('2–4 s · applied'), findsOneWidget);
+  });
+
+  testWidgets('a run another client started clears the applied marks', (
+    t,
+  ) async {
+    final fake = await _pump(t, _done(), shared: true);
+    await t.ensureVisible(find.byKey(const Key('guiding-assistant-apply')));
+    await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+    await t.pump();
+    await t.pump();
+    expect(find.text('2–4 s · applied'), findsOneWidget);
+    await _pump(t, _done(), fake: fake, open: false, shared: true);
+    // No Start from here: the guider's page (or another client) ran it.
+    fake.status = GuidingAssistantStatus.fromJson({
+      'connected': true,
+      'state': 'measuring',
+      'duration_sec': 120,
+      'elapsed_sec': 5,
+      'samples': 2,
+    });
+    await _pump(t, fake.status, fake: fake, shared: true);
+    expect(
+      _text(t, const Key('guiding-assistant-headline')),
+      'Measuring drift…',
+    );
+    fake.finish();
+    await t.pump(GuidingAssistantNotifier.runningPollInterval);
+    await t.pump();
+    await t.pump();
+    expect(find.byKey(const Key('guiding-assistant-apply')), findsOneWidget);
+    expect(find.textContaining('· applied'), findsNothing);
+    expect(
+      t
+          .widget<CheckboxListTile>(find.byKey(const Key('ga-suggest-exposure')))
+          .value,
+      isTrue,
+      reason: 'the new run offers everything again',
+    );
+  });
+
+  testWidgets('switching servers drops the applied marks', (t) async {
+    final fake = await _pump(t, _done(), shared: true);
+    await t.ensureVisible(find.byKey(const Key('guiding-assistant-apply')));
+    await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+    await t.pump();
+    await t.pump();
+    expect(find.text('2–4 s · applied'), findsOneWidget);
+    await _pump(t, _done(), fake: fake, open: false, shared: true);
+    _container(t).read(_server.notifier).state = const AraServer(
+      hostname: 'other',
+      port: 5555,
+    );
+    await t.pump();
+    await _pump(t, _done(), fake: fake, shared: true);
+    expect(find.textContaining('· applied'), findsNothing);
+    expect(
+      t
+          .widget<CheckboxListTile>(find.byKey(const Key('ga-suggest-exposure')))
+          .value,
+      isTrue,
+    );
+  });
+
+  testWidgets('an Accept that lands after a server switch marks nothing', (
+    t,
+  ) async {
+    final fake = await _pump(t, _done(), shared: true);
+    final gate = Completer<void>();
+    fake.applyGate = gate;
+    await t.ensureVisible(find.byKey(const Key('guiding-assistant-apply')));
+    await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+    await t.pump();
+    _container(t).read(_server.notifier).state = const AraServer(
+      hostname: 'other',
+      port: 5555,
+    );
+    await t.pump();
+    gate.complete();
+    await t.pump();
+    await t.pump();
+    expect(_container(t).read(guidingAssistantAppliedProvider), isEmpty);
+  });
+
+  testWidgets('a missing drift reads a bare dash', (t) async {
+    await _pump(
+      t,
+      GuidingAssistantStatus.fromJson({
+        'connected': true,
+        'state': 'done',
+        'samples': 1,
+        'ra_rms_px': 0.3,
+        'recommendations': {'messages': []},
+      }),
+    );
+    expect(_text(t, const Key('ga-figure-0')), '—');
+    expect(_text(t, const Key('ga-figure-2')), '0.30 px');
+  });
+
+  testWidgets('Start waits while the guider is guiding', (t) async {
+    await _pump(
+      t,
+      const GuidingAssistantStatus(connected: true, state: 'idle'),
+      guider: GuiderRuntimeState.guiding,
+    );
+    expect(
+      _text(t, const Key('guiding-assistant-headline')),
+      startsWith('Stop guiding first'),
+    );
+    expect(
+      t
+          .widget<FilledButton>(
+            find.byKey(const Key('guiding-assistant-start')),
+          )
+          .enabled,
+      isFalse,
+    );
+    // Settling after a dither is still a run's guiding.
+    await _pump(
+      t,
+      const GuidingAssistantStatus(connected: true, state: 'idle'),
+      guider: GuiderRuntimeState.settling,
+    );
+    expect(
+      t
+          .widget<FilledButton>(
+            find.byKey(const Key('guiding-assistant-start')),
+          )
+          .enabled,
+      isFalse,
+    );
+    // Looping with a star picked (what the assistant wants) is allowed.
+    await _pump(
+      t,
+      const GuidingAssistantStatus(connected: true, state: 'idle'),
+      guider: GuiderRuntimeState.starSelected,
+    );
+    expect(
+      _text(t, const Key('guiding-assistant-headline')),
+      startsWith('Ready.'),
+    );
+    expect(
+      t
+          .widget<FilledButton>(
+            find.byKey(const Key('guiding-assistant-start')),
+          )
+          .enabled,
+      isTrue,
+    );
+  });
+
+  testWidgets(
+    'closing and reopening keeps the applied marks and does not re-tick them',
+    (t) async {
+      final fake = await _pump(t, _done(), shared: true);
+      await t.ensureVisible(find.byKey(const Key('ga-suggest-min_move_dec')));
+      await t.tap(find.byKey(const Key('ga-suggest-min_move_dec')));
+      await t.pump();
+      await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+      await t.pump();
+      await t.pump();
+      expect(fake.calls, ['apply exposure,min_move_ra,dec_backlash']);
+
+      // Close (the panel's autoDispose state goes) and reopen on the same run.
+      await _pump(t, _done(), fake: fake, open: false, shared: true);
+      await _pump(t, _done(), fake: fake, shared: true);
+      expect(find.text('2–4 s · applied'), findsOneWidget);
+      expect(find.text('0.20 px'), findsOneWidget);
+      for (final (k, ticked) in [
+        ('exposure', false),
+        ('min_move_ra', false),
+        ('dec_backlash', false),
+        ('min_move_dec', true),
+      ]) {
+        expect(
+          t.widget<CheckboxListTile>(find.byKey(Key('ga-suggest-$k'))).value,
+          ticked,
+          reason: k,
+        );
+      }
+      // Accept has nothing ticked but the one left out before.
+      await t.ensureVisible(find.byKey(const Key('guiding-assistant-apply')));
+      await t.tap(find.byKey(const Key('guiding-assistant-apply')));
+      await t.pump();
+      await t.pump();
+      expect(fake.calls.last, 'apply min_move_dec');
+
+      // A new run starts clean.
+      await t.ensureVisible(find.byKey(const Key('guiding-assistant-start')));
+      await t.tap(find.byKey(const Key('guiding-assistant-start')));
+      await t.pump();
+      await t.pump();
+      fake.finish();
+      await t.pump(GuidingAssistantNotifier.runningPollInterval);
+      await t.pump();
+      await t.pump();
+      expect(find.textContaining('· applied'), findsNothing);
+    },
+  );
 }
