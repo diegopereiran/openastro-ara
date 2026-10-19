@@ -356,7 +356,7 @@ namespace OpenAstroAra.Test {
             using var feed = new FrameSolveFeed(frames.Object, solver.Object, profileService: new HeadlessProfileService()) {
                 PixelLoader = (path, _) => {
                     Assert.That(path, Is.EqualTo("/captures/m42.fits"));
-                    return Task.FromResult((new ushort[16], 4, 4));
+                    return Task.FromResult((new ushort[16], 4, 4, 1));
                 },
             };
 
@@ -364,6 +364,29 @@ namespace OpenAstroAra.Test {
 
             Assert.That(solved, Is.Not.Null);
             Assert.That(solved!.RADegrees, Is.EqualTo(Target.RADegrees).Within(1e-9));
+        }
+
+        [Test]
+        public async Task The_frames_fits_binning_reaches_the_solver() {
+            // #1136 bot round 3 — the feed built an empty ImageMetaData, so a 2x2 light solved at half
+            // its true scale; the loader now carries XBINNING and the image must say 2.
+            var id = Guid.NewGuid();
+            var frames = new Mock<IFrameRepository>();
+            frames.Setup(f => f.GetAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(Frame(id, "/captures/binned.fits"));
+            OpenAstroAra.Image.Interfaces.IImageData? seen = null;
+            var solver = new Mock<IPlateSolveService>();
+            solver.Setup(s => s.SolveImage(It.IsAny<OpenAstroAra.Image.Interfaces.IImageData>(), It.IsAny<Coordinates?>(), null, It.IsAny<CancellationToken>()))
+                .Callback<OpenAstroAra.Image.Interfaces.IImageData, Coordinates?, IProgress<OpenAstroAra.Core.Model.ApplicationStatus>?, CancellationToken>((img, _, _, _) => seen = img)
+                .ReturnsAsync(new PlateSolveResult { Success = true, Coordinates = Target });
+            using var feed = new FrameSolveFeed(frames.Object, solver.Object, profileService: new HeadlessProfileService()) {
+                PixelLoader = (_, _) => Task.FromResult((new ushort[16], 4, 4, 2)),
+            };
+
+            await feed.SolveFrameAsync(id, CancellationToken.None);
+
+            Assert.That(seen, Is.Not.Null);
+            Assert.That(seen!.MetaData.Camera.BinX, Is.EqualTo(2));
+            Assert.That(PlateSolveService.BinningOf(seen), Is.EqualTo(2));
         }
 
         [Test]
@@ -375,7 +398,7 @@ namespace OpenAstroAra.Test {
             solver.Setup(s => s.SolveImage(It.IsAny<OpenAstroAra.Image.Interfaces.IImageData>(), It.IsAny<Coordinates?>(), null, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new PlateSolveResult { Success = false });
             using var feed = new FrameSolveFeed(frames.Object, solver.Object, profileService: new HeadlessProfileService()) {
-                PixelLoader = (_, _) => Task.FromResult((new ushort[16], 4, 4)),
+                PixelLoader = (_, _) => Task.FromResult((new ushort[16], 4, 4, 1)),
             };
 
             Assert.That(await feed.SolveFrameAsync(id, CancellationToken.None), Is.Null, "solver said no");

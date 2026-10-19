@@ -104,6 +104,58 @@ namespace OpenAstroAra.Test {
             Assert.That(sw.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)));
         }
 
+        // #1136 bot round 4 — the two SolveAsyncImpl behaviours the parameter drives, through the real
+        // save → run → read → move/delete path, not just the flags on the parameter.
+        private static OpenAstroAra.Image.ImageData.BaseImageData Frame() =>
+            new OpenAstroAra.Image.ImageData.BaseImageData(new ushort[8 * 8], 8, 8, bitDepth: 16, isBayered: false,
+                new OpenAstroAra.Image.ImageData.ImageMetaData(), new OpenAstroAra.Server.Services.HeadlessProfileService(), null!, null!);
+
+        private static PlateSolveParameter Parameter() => new() { FocalLength = 448, PixelSize = 3.76, DownSampleFactor = 1, MaxObjects = 500, DisableNotifications = true };
+
+        // A failed frame is named after the frame's target, so a per-test target name keeps the count
+        // ours while other fixtures write Failed/ in parallel.
+        private static OpenAstroAra.Image.ImageData.BaseImageData Frame(string target) {
+            var frame = Frame();
+            frame.MetaData.Target.Name = target;
+            return frame;
+        }
+
+        private static int FailedFrames(string target) =>
+            Directory.Exists(BaseSolver.FailedDirectory) ? Directory.GetFiles(BaseSolver.FailedDirectory).Count(f => f.Contains(target, StringComparison.Ordinal)) : 0;
+
+        [Test]
+        public async Task The_parameters_timeout_cancels_a_hung_solve() {
+            // Without the parameter's timeout the solver ran under the legacy 10-minute cap.
+            var solver = new FakeSolver(Script("echo started\nsleep 30\n"));
+            var parameter = Parameter();
+            parameter.Timeout = TimeSpan.FromSeconds(1);
+            parameter.KeepFailedFrame = false;
+            var sw = Stopwatch.StartNew();
+
+            var result = await solver.SolveAsync(Frame(), parameter, null, CancellationToken.None);
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(sw.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)), "the 1 s budget, not the 10-minute cap");
+        }
+
+        [Test]
+        public async Task A_non_final_stage_leaves_no_failed_frame_on_disk_and_the_final_one_keeps_it() {
+            var solver = new FakeSolver(Script("exit 1"));
+            var target = "keepframe-" + Guid.NewGuid().ToString("N");
+
+            var quiet = Parameter();
+            quiet.KeepFailedFrame = false;
+            Assert.That((await solver.SolveAsync(Frame(target), quiet, null, CancellationToken.None)).Success, Is.False);
+            Assert.That(FailedFrames(target), Is.EqualTo(0), "a quiet stage deletes its frame instead of copying it to Failed/");
+
+            var final = Parameter(); // KeepFailedFrame defaults to true
+            Assert.That((await solver.SolveAsync(Frame(target), final, null, CancellationToken.None)).Success, Is.False);
+            Assert.That(FailedFrames(target), Is.GreaterThan(0), "the final failure's frame is kept for diagnosis");
+            foreach (var f in Directory.GetFiles(BaseSolver.FailedDirectory).Where(f => f.Contains(target, StringComparison.Ordinal))) {
+                File.Delete(f);
+            }
+        }
+
         // #1219 — a progress sink that throws must not take the process down (the reader callback
         // runs on a thread-pool thread, where an escaping exception is fatal).
         [Test]

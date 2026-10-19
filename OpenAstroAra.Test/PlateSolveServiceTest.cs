@@ -36,12 +36,92 @@ namespace OpenAstroAra.Test {
     public class PlateSolveServiceTest {
 
         [Test]
+        public void A_solved_scale_far_from_the_profile_rewrites_the_focal_length_reducer_factored_out() {
+            // #1136 — profile says 530 mm with a 0.8x reducer (424 mm effective); the sky says 1.0"/px at
+            // 3.76 µm, i.e. 775 mm effective → the native focal length becomes 775 / 0.8 ≈ 969 mm.
+            var store = new InMemoryProfileStore();
+            store.PutOpticsSettings(store.GetOpticsSettings() with { FocalLengthMm = 530, ReducerFactor = 0.8, PixelSizeUm = 3.76 });
+            var sut = new PlateSolveService(Mock.Of<IProfileService>(), Mock.Of<IPlateSolverFactory>(), store);
+            var parameter = new PlateSolveParameter { FocalLength = 424, PixelSize = 3.76, Binning = 1 };
+
+            sut.LearnFocalLength(parameter, new PlateSolveResult { Success = true, Pixscale = 1.0 });
+
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(969.5).Within(0.5));
+            Assert.That(store.GetOpticsSettings().ReducerFactor, Is.EqualTo(0.8), "the reducer entry is the user's, untouched");
+        }
+
+        [Test]
+        public async Task The_unattended_solve_entry_point_never_rewrites_the_optics_only_the_interactive_one_does() {
+            // Bot round 1 — FrameSolveFeed (center after drift, mid-sequence, nobody watching) calls
+            // SolveImage; only the REST solve the user triggers may learn the focal length.
+            var store = new InMemoryProfileStore();
+            store.PutOpticsSettings(store.GetOpticsSettings() with { FocalLengthMm = 530, ReducerFactor = 1, PixelSizeUm = 3.76 });
+            var profileService = new HeadlessProfileService();
+            var imageSolver = new Mock<IImageSolver>();
+            imageSolver
+                .Setup(s => s.Solve(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new PlateSolveResult { Success = true, Pixscale = 2.93 }); // the 2x2-binned case: twice the expected 1.46"/px
+            var factory = new Mock<IPlateSolverFactory>();
+            factory.Setup(f => f.GetPlateSolver(It.IsAny<IPlateSolveSettings>())).Returns(Mock.Of<IPlateSolver>());
+            factory.Setup(f => f.GetBlindSolver(It.IsAny<IPlateSolveSettings>())).Returns(Mock.Of<IPlateSolver>());
+            factory.Setup(f => f.GetImageSolver(It.IsAny<IPlateSolver>(), It.IsAny<IPlateSolver>())).Returns(imageSolver.Object);
+            var sut = new PlateSolveService(profileService, factory.Object, store);
+
+            await sut.SolveImage(Mock.Of<IImageData>(), null, null, CancellationToken.None);
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(530), "the unattended entry point leaves the optics alone");
+
+            await sut.SolveImageAndLearnOptics(Mock.Of<IImageData>(), null, null, CancellationToken.None);
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(265).Within(0.5), "the interactive entry point learns");
+        }
+
+        [Test]
+        public void A_wild_solved_scale_is_reported_not_learned() {
+            // Bot round 2 — a false match with a 5x scale would rewrite the profile from one solve.
+            var store = new InMemoryProfileStore();
+            store.PutOpticsSettings(store.GetOpticsSettings() with { FocalLengthMm = 530, ReducerFactor = 1, PixelSizeUm = 3.76 });
+            var sut = new PlateSolveService(Mock.Of<IProfileService>(), Mock.Of<IPlateSolverFactory>(), store);
+            var parameter = new PlateSolveParameter { FocalLength = 530, PixelSize = 3.76, Binning = 1 };
+            var scale = AstroUtil.ArcsecPerPixel(3.76, 530);
+
+            sut.LearnFocalLength(parameter, new PlateSolveResult { Success = true, Pixscale = scale * 5 });
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(530), "5x shorter: refused");
+            sut.LearnFocalLength(parameter, new PlateSolveResult { Success = true, Pixscale = scale / 4 });
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(530), "4x longer: refused");
+            sut.LearnFocalLength(parameter, new PlateSolveResult { Success = true, Pixscale = scale / 2 });
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(1060).Within(1), "2x (a Barlow): learned");
+        }
+
+        [Test]
+        public void A_solved_scale_within_tolerance_leaves_the_profile_alone() {
+            var store = new InMemoryProfileStore();
+            store.PutOpticsSettings(store.GetOpticsSettings() with { FocalLengthMm = 530, ReducerFactor = 1, PixelSizeUm = 3.76 });
+            var sut = new PlateSolveService(Mock.Of<IProfileService>(), Mock.Of<IPlateSolverFactory>(), store);
+            var parameter = new PlateSolveParameter { FocalLength = 530, PixelSize = 3.76, Binning = 1 };
+            var scale = AstroUtil.ArcsecPerPixel(3.76, 530);
+
+            sut.LearnFocalLength(parameter, new PlateSolveResult { Success = true, Pixscale = scale * 1.04 });
+
+            Assert.That(store.GetOpticsSettings().FocalLengthMm, Is.EqualTo(530));
+        }
+
+        [Test]
+        public void Binning_comes_from_the_frame_metadata() {
+            var meta = new OpenAstroAra.Image.ImageData.ImageMetaData();
+            meta.Camera.BinX = 2;
+            var image = new Mock<IImageData>();
+            image.SetupGet(i => i.MetaData).Returns(meta);
+            Assert.That(PlateSolveService.BinningOf(image.Object), Is.EqualTo(2));
+            Assert.That(PlateSolveService.BinningOf(Mock.Of<IImageData>()), Is.EqualTo(1));
+        }
+
+        [Test]
         public async Task SolveImage_builds_parameter_from_profile_and_returns_the_solver_result() {
             var settings = new Mock<IPlateSolveSettings>();
             settings.SetupGet(s => s.SearchRadius).Returns(15);
             settings.SetupGet(s => s.Regions).Returns(2);
             settings.SetupGet(s => s.DownSampleFactor).Returns(2);
             settings.SetupGet(s => s.MaxObjects).Returns(500);
+            settings.SetupGet(s => s.SolveTimeoutSeconds).Returns(45);
 
             var profileService = new Mock<IProfileService>();
             profileService.SetupGet(p => p.ActiveProfile.PlateSolveSettings).Returns(settings.Object);
@@ -74,7 +154,8 @@ namespace OpenAstroAra.Test {
             Assert.That(captured.Regions, Is.EqualTo(2));
             Assert.That(captured.DownSampleFactor, Is.EqualTo(2));
             Assert.That(captured.MaxObjects, Is.EqualTo(500));
-            Assert.That(captured.Binning, Is.EqualTo(1)); // set for a reason (solve at native scale), not a profile mirror
+            Assert.That(captured.Binning, Is.EqualTo(1)); // the frame carries no binning → native scale
+            Assert.That(captured.Timeout, Is.EqualTo(TimeSpan.FromSeconds(45))); // #1136 — the store's timeout reaches the solver
             // Seeds a near (non-blind) solve — the parameter clones/normalizes, so compare values not identity.
             Assert.That(captured.Coordinates, Is.Not.Null);
             Assert.That(captured.Coordinates!.RA, Is.EqualTo(coords.RA).Within(1e-6));

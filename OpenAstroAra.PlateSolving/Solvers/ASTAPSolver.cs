@@ -25,7 +25,7 @@ using System.Linq;
 
 namespace OpenAstroAra.PlateSolving.Solvers {
 
-    internal sealed class ASTAPSolver : CLISolver {
+    internal sealed class ASTAPSolver : CLISolver, OpenAstroAra.PlateSolving.Interfaces.IScaleSearchSolver {
 
         public sealed class ASTAPValidationFailedException : OpenAstroAra.PlateSolving.PlateSolverConfigurationException {
 
@@ -199,12 +199,19 @@ namespace OpenAstroAra.PlateSolving.Solvers {
                 Logger.Warning($"Plate solve - ASTAP star database directory '{databaseLocation}' is missing or empty; leaving ASTAP to its default lookup. Download a database into it (see DEPLOY.md) or fix Options → Plate solving.");
             }
 
-            //Field height of image
-            var fov = Math.Round(imageProperties.FoVH, 6);
+            //Field height of image. -fov 0 asks ASTAP to search the scale itself: the staged search's
+            //"the profile's optics are wrong" stage (#1136).
+            var fov = parameter.SearchScale ? 0 : Math.Round(imageProperties.FoVH, 6);
             args.Add($"-fov {fov.ToString(CultureInfo.InvariantCulture)}");
 
-            //Downsample factor
-            args.Add($"-z {parameter.DownSampleFactor}");
+            //Downsample factor; 0 in the parameter = from the pixel scale (#1136)
+            var downsample = parameter.DownSampleFactor > 0
+                ? parameter.DownSampleFactor
+                : SolveTuning.DownsampleFor(imageProperties.ArcSecPerPixel, imageProperties.ImageHeight);
+            if (parameter.DownSampleFactor <= 0) {
+                Logger.Debug($"Plate solve - downsample {downsample} from {imageProperties.ArcSecPerPixel.ToString("0.00", CultureInfo.InvariantCulture)}\"/px native scale, {imageProperties.ImageHeight} px high");
+            }
+            args.Add($"-z {downsample}");
 
             //Max number of stars
             args.Add($"-s {parameter.MaxObjects}");
@@ -236,14 +243,10 @@ namespace OpenAstroAra.PlateSolving.Solvers {
             if (!File.Exists(this.executableLocation)) {
                 throw new ASTAPValidationFailedException($"ASTAP executable not found at {this.executableLocation}");
             }
-            var astapVersionInfo = FileVersionInfo.GetVersionInfo(this.executableLocation);
-            if (astapVersionInfo.FileVersion == null) {
-                // Version below 0.9.1.0
-                // Only allows downsample in the range of 1 to 4
-                if (parameter.DownSampleFactor == 0) {
-                    throw new ASTAPValidationFailedException($"ASTAP version below 0.9.1.0 does not allow auto downsample factor value of 0! Please update your ASTAP version!");
-                }
-            }
+            // The N.I.N.A. port refused DownSampleFactor 0 when the executable carried no Windows file
+            // version (ASTAP < 0.9.1.0 had no auto downsample). A Linux ELF never has one, so on the Pi
+            // that check rejected every solve with the automatic default (#1136, caught on the CM4 rig).
+            // The builder never hands ASTAP a 0 anyway: it derives the factor from the pixel scale.
         }
 
         protected override string GetOutputPath(string imageFilePath) {

@@ -55,30 +55,42 @@ namespace OpenAstroAra.PlateSolving.Solvers {
             CancellationToken cancelToken) {
             var result = new PlateSolveResult() { Success = false };
             string? imagePath = null, outputPath = null;
+            // #1136 — per-stage timing, so the Pi benchmark can tell "writing the frame" from "the
+            // solver" from "reading the result" without a profiler.
+            var total = System.Diagnostics.Stopwatch.StartNew();
+            long saveMs = 0, solverMs = 0;
+            var timeout = parameter.Timeout ?? DefaultTimeout;
+            LastExitCode = null; // instance state: a throw before the solver runs must not report the previous run's code
             try {
                 // Update target coordinates
                 if (source.MetaData.Target.Coordinates == null || double.IsNaN(source.MetaData.Target.Coordinates.RA))
                     source.MetaData.Target.Coordinates = source.MetaData.Telescope.Coordinates;
-                // Copy Image to local app data
+                // Copy Image to the solver's working directory (tmpfs when the host has one, see BaseSolver)
                 imagePath = await PrepareAndSaveImage(source, cancelToken);
+                saveMs = total.ElapsedMilliseconds;
 
                 progress?.Report(new ApplicationStatus() { Status = Loc.Instance["LblSolving"] });
 
                 outputPath = GetOutputPath(imagePath);
 
                 using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken)) {
-                    cts.CancelAfter(TimeSpan.FromMinutes(10));
-                    // Pass the linked token so the 10-minute timeout actually cancels the solve.
-                    await StartCLI(imagePath, outputPath, parameter, imageProperties, progress, cts.Token);
+                    cts.CancelAfter(timeout);
+                    try {
+                        // Pass the linked token so the timeout actually cancels the solve.
+                        await StartCLI(imagePath, outputPath, parameter, imageProperties, progress, cts.Token);
+                    } finally {
+                        solverMs = total.ElapsedMilliseconds - saveMs;
+                    }
                 }
 
                 //Extract solution coordinates
                 result = ReadResult(outputPath, parameter, imageProperties);
             } catch (OperationCanceledException) {
                 if (!cancelToken.IsCancellationRequested) {
-                    Logger.Error("Platesolver timed out after 10 minutes");
+                    Logger.Error($"Platesolver timed out after {timeout.TotalSeconds.ToString("0", System.Globalization.CultureInfo.InvariantCulture)} s (search radius {parameter.SearchRadius}°)");
                 }
             } finally {
+                Logger.Info($"Plate solve timing - {(result.Success ? "solved" : "no solution")} in {total.ElapsedMilliseconds} ms: write frame {saveMs} ms, solver {solverMs} ms, exit {LastExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a"}, radius {parameter.SearchRadius}°, scale {(parameter.SearchScale ? "searched" : "known")}");
                 progress?.Report(new ApplicationStatus() { Status = string.Empty });
 
                 var filePrefix = FAILED_FILENAME;
@@ -89,16 +101,21 @@ namespace OpenAstroAra.PlateSolving.Solvers {
                     filePrefix += ".blind";
                 }
 
+                // A non-final stage of the staged search (#1136) never keeps its failed frame: the move
+                // from /dev/shm to the on-disk Failed/ directory is a 50 MB copy per stage that would
+                // cancel the tmpfs gain, and each copy overwrote the last (same prefix). Only the
+                // final failure is kept, which is the one worth looking at.
+                var keep = result.Success || parameter.KeepFailedFrame ? result : new PlateSolveResult { Success = true };
                 if (imagePath != null && File.Exists(imagePath)) {
-                    MoveOrDeleteFile(result, imagePath, filePrefix, cancelToken);
+                    MoveOrDeleteFile(keep, imagePath, filePrefix, cancelToken);
                 }
 
                 if (outputPath != null && File.Exists(outputPath)) {
-                    MoveOrDeleteFile(result, outputPath, filePrefix, cancelToken);
+                    MoveOrDeleteFile(keep, outputPath, filePrefix, cancelToken);
                 }
 
                 foreach (var file in GetSideCarFilePaths(imagePath ?? string.Empty)) {
-                    MoveOrDeleteFile(result, file, filePrefix, cancelToken);
+                    MoveOrDeleteFile(keep, file, filePrefix, cancelToken);
                 }
             }
             return result;
@@ -214,6 +231,7 @@ namespace OpenAstroAra.PlateSolving.Solvers {
             // documented codes (ASTAP: 1 = clean no-solution, 32/33 = missing star database, ...).
             // The last lines the solver printed go with it, since per-line output is Debug only.
             var exitCode = process.ExitCode;
+            LastExitCode = exitCode;
             if (exitCode != 0) {
                 string lastOutput;
                 lock (tail) {
@@ -228,6 +246,12 @@ namespace OpenAstroAra.PlateSolving.Solvers {
         /// exit (stderr lines prefixed <c>[stderr]</c>), as carried by the exit warning; null until a
         /// run ends that way. Exposed for subclasses and tests (#1219).</summary>
         protected IReadOnlyList<string>? LastExitTail { get; private set; }
+
+        /// <summary>Exit code of the last solver run, for the timing line; null before the first run.</summary>
+        protected int? LastExitCode { get; private set; }
+
+        /// <summary>The solve budget when the parameter sets none (the pre-#1136 cap).</summary>
+        internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
 
         // CancelOutputRead/CancelErrorRead throw InvalidOperationException when the matching
         // Begin*ReadLine never ran (a Start that failed); nothing to stop then.
