@@ -46,6 +46,34 @@ namespace OpenAstroAra.Test {
             store.Verify(s => s.PutPolarAlignSettings(It.IsAny<PolarAlignSettingsDto>()), Times.Never);
         }
 
+        [TestCase(-1)]
+        [TestCase(5)]
+        public void Out_of_range_binning_is_400_and_not_stored(int binning) {
+            // §45.4 — 0 = auto, 1–4 = override. Without this check a negative value reaches
+            // PolarAlignBinning.Resolve and is taken as auto; a hand-edited profile.json above 4
+            // is clamped by Resolve, but the API says no.
+            var store = new Mock<IProfileStore>();
+
+            var result = ProfileEndpoints.PutPolarAlignSettings(
+                new PolarAlignSettingsDto(Binning: binning), store.Object);
+
+            Assert.That((result as ProblemHttpResult)?.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
+            store.Verify(s => s.PutPolarAlignSettings(It.IsAny<PolarAlignSettingsDto>()), Times.Never);
+        }
+
+        [TestCase(0)]
+        [TestCase(4)]
+        public void Auto_and_the_cap_are_accepted_binning_values(int binning) {
+            var store = new Mock<IProfileStore>();
+            store.Setup(s => s.GetPolarAlignSettings()).Returns(new PolarAlignSettingsDto(Binning: binning));
+
+            var result = ProfileEndpoints.PutPolarAlignSettings(
+                new PolarAlignSettingsDto(Binning: binning), store.Object);
+
+            Assert.That(result, Is.Not.InstanceOf<ProblemHttpResult>());
+            store.Verify(s => s.PutPolarAlignSettings(It.Is<PolarAlignSettingsDto>(d => d.Binning == binning)), Times.Once);
+        }
+
         [TestCase("burst")]
         [TestCase("Loop")]
         [TestCase("")]
