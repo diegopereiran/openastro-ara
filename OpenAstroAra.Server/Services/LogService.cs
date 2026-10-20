@@ -115,6 +115,12 @@ public sealed partial class LogService : ILogService {
                 if (entry is null) {
                     continue; // a torn final line or a non-CLEF row — skip, never throw
                 }
+                // Cursor page (#1185): lines arrive newest-first, so everything at or after the cursor is
+                // skipped (before the level/substring work, which it makes moot) and the window fills with
+                // the entries just before it.
+                if (request.Before is { } before && entry.Timestamp >= before) {
+                    continue;
+                }
                 if (LevelRank(entry.Level) < minRank) {
                     continue;
                 }

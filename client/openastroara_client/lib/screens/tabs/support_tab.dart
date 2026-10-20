@@ -39,6 +39,15 @@ class _SupportTabState extends ConsumerState<SupportTab> {
   String _minLevel = 'All';
   List<LogEntry>? _entries;
   bool _loading = false;
+  // #1185 — paging back through older entries: in flight, and whether the last
+  // page came back short (nothing older to fetch).
+  bool _loadingMore = false;
+  bool _exhausted = false;
+  // The filters the current list was loaded with. The substring field only
+  // applies on submit, so paging back must reuse these, never the field's
+  // current text (review round 1).
+  String? _appliedMinLevel;
+  String _appliedSubstring = '';
   bool _downloading = false;
   String? _error;
   // Monotonic refresh id: only the latest call applies its result/error, so a
@@ -64,16 +73,26 @@ class _SupportTabState extends ConsumerState<SupportTab> {
     final gen = ++_refreshGen;
     // Don't clear _error here — keep the last outcome until this call resolves,
     // so a failed refresh leaves the prior entries (and only updates the banner).
-    setState(() => _loading = true);
+    // A page-back in flight is superseded by this refresh: drop its spinner now
+    // rather than when the stale call returns.
+    setState(() {
+      _loading = true;
+      _loadingMore = false;
+    });
+    final minLevel = _minLevel == 'All' ? null : _minLevel;
+    final substring = _substringCtl.text;
     try {
       final entries = await api.tail(
         maxLines: _maxLines,
-        minLevel: _minLevel == 'All' ? null : _minLevel,
-        containsSubstring: _substringCtl.text,
+        minLevel: minLevel,
+        containsSubstring: substring,
       );
       if (!mounted || gen != _refreshGen) return;
       setState(() {
         _entries = entries;
+        _appliedMinLevel = minLevel;
+        _appliedSubstring = substring;
+        _exhausted = entries.length < _maxLines;
         _error = null;
       });
     } catch (e) {
@@ -81,6 +100,43 @@ class _SupportTabState extends ConsumerState<SupportTab> {
       setState(() => _error = friendlyError(e, action: 'load the logs'));
     } finally {
       if (mounted && gen == _refreshGen) setState(() => _loading = false);
+    }
+  }
+
+  /// Fetch the page of entries older than the oldest one held and append it.
+  /// The same filters apply; a short page marks the log exhausted.
+  Future<void> _loadOlder() async {
+    final api = ref.read(logsApiProvider);
+    final held = _entries;
+    if (api == null || held == null || held.isEmpty || _loadingMore) return;
+    final gen = _refreshGen;
+    // The cursor is the oldest entry with a real timestamp: LogEntry.fromJson
+    // falls back to the epoch for an unparseable one, and a 1970 cursor would
+    // end paging early with an empty page.
+    final cursor = held
+        .lastWhere((e) => e.timestamp.millisecondsSinceEpoch > 0, orElse: () => held.last)
+        .timestamp;
+    setState(() => _loadingMore = true);
+    try {
+      final older = await api.tail(
+        maxLines: _maxLines,
+        minLevel: _appliedMinLevel,
+        containsSubstring: _appliedSubstring,
+        before: cursor,
+      );
+      // A refresh that started meanwhile owns the list now; drop this page.
+      if (!mounted || gen != _refreshGen) return;
+      setState(() {
+        _entries = [...held, ...older];
+        _exhausted = older.length < _maxLines;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted || gen != _refreshGen) return;
+      setState(() => _error = friendlyError(e, action: 'load older logs'));
+    } finally {
+      // Only this call's own spinner: a refresh that superseded it already cleared the flag.
+      if (mounted && gen == _refreshGen) setState(() => _loadingMore = false);
     }
   }
 
@@ -253,8 +309,27 @@ class _SupportTabState extends ConsumerState<SupportTab> {
               // into a bug report instead of only the whole-file download.
               : SelectionArea(
                   child: ListView.builder(
-                    itemCount: entries.length,
-                    itemBuilder: (context, i) => _LogRow(entry: entries[i]),
+                    // One extra row at the end: the "Load older" page control,
+                    // shown until a page comes back short.
+                    itemCount: entries.length + (_exhausted ? 0 : 1),
+                    itemBuilder: (context, i) => i < entries.length
+                        ? _LogRow(entry: entries[i])
+                        : Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Center(
+                              child: _loadingMore
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : OutlinedButton.icon(
+                                      onPressed: _loading ? null : _loadOlder,
+                                      icon: const Icon(Icons.history),
+                                      label: const Text('Load older'),
+                                    ),
+                            ),
+                          ),
                   ),
                 ),
         ),
