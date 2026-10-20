@@ -46,12 +46,17 @@ public sealed partial class GuiderService {
     private bool _starLostReacted;                 // the reaction ran for the current lost-star episode
     private EquipmentFaultEvent? _starLostFault;   // its §42.5 row, resolved when the star is back
     private IReadOnlyList<Guid> _starLostPausedRuns = Array.Empty<Guid>();
+    // IGuiderMediator.GuidingStoppedUtc — the Dither's long-gap read. Deliberately NOT cleared by
+    // ResetStarLostWatchLocked: guiding stays off across a guider disconnect and reconnect, so a
+    // restart after one measures the gap from the real stop, not from the reconnect.
+    private DateTimeOffset? _guidingStoppedUtc;
 
     private void NoteStarLostMarker(string? kind) {
         lock (_gate) {
             switch (kind) {
                 case "guiding_started":
                     _guidingSeen = true;
+                    _guidingStoppedUtc = null;
                     break;
                 case "star_lost":
                 case "lock_position_lost":
@@ -66,7 +71,16 @@ public sealed partial class GuiderService {
                     // outstanding stays until guide steps return, a later daemon pause adopts it, or the
                     // user resumes.
                     _guidingSeen = false;
+                    _guidingStoppedUtc ??= DateTimeOffset.UtcNow;
                     DisarmStarLostWatchLocked();
+                    if (_recoveryStopPending) {
+                        // The stop the recovery itself issued before its re-center: consumed once, the
+                        // episode stays alive. Any later stop is the user's and ends it below.
+                        _recoveryStopPending = false;
+                    } else {
+                        // ...and nothing to recover: the user owns the pause now.
+                        DisarmStarLostRecoveryLocked();
+                    }
                     break;
             }
         }
@@ -86,6 +100,7 @@ public sealed partial class GuiderService {
 
     private void ResetStarLostWatchLocked() {
         DisarmStarLostWatchLocked();
+        ResetStarLostRecoveryLocked();
         _guidingSeen = false;
         _starLostReacted = false;
         _starLostFault = null;
@@ -103,6 +118,9 @@ public sealed partial class GuiderService {
                 return; // the star came back (or guiding ended) before the grace ran out
             }
             _starLostReacted = true;
+            // A new episode starts clean: a give-up, the failure count, the one-warning latch and the
+            // own-stop flags all belong to the previous cloud (review round 3).
+            ResetStarLostRecoveryLocked();
             fault = new EquipmentFaultEvent(DeviceType.Guider, DeviceId: null, DeviceName: "PHD2",
                 EquipmentFaultKind.TrackingLost,
                 $"guide star lost for more than {(int) StarLostGrace.TotalSeconds} s — the guider is still looking for it",
@@ -117,10 +135,17 @@ public sealed partial class GuiderService {
     // Caller holds _gate.
     private void NoteGuideStepLocked() {
         _guidingSeen = true;
+        _guidingStoppedUtc = null;
         DisarmStarLostWatchLocked();
         if (!_starLostReacted) {
             return;
         }
+        if (_recoveryInFlight && _recoveryStoppedGuiding) {
+            // The recovery restarted guiding itself: it re-centered first and resumes the run once
+            // guiding is confirmed, with the notification that says so. Not a relock.
+            return;
+        }
+        DisarmStarLostRecoveryLocked();
         _starLostReacted = false;
         var fault = _starLostFault;
         var paused = _starLostPausedRuns;
@@ -165,9 +190,9 @@ public sealed partial class GuiderService {
     [LoggerMessage(EventId = 4228, Level = Microsoft.Extensions.Logging.LogLevel.Warning, Message = "§42.2 guide star lost for more than {GraceSec} s — running the on_guider_lost reaction")]
     private partial void LogStarLostGraceElapsed(int graceSec);
 
-    [LoggerMessage(EventId = 4229, Level = Microsoft.Extensions.Logging.LogLevel.Information, Message = "§42.2 guide star recovered: runsPaused={Paused} runsResumed={Resumed}")]
+    [LoggerMessage(EventId = 4247, Level = Microsoft.Extensions.Logging.LogLevel.Information, Message = "§42.2 guide star recovered: runsPaused={Paused} runsResumed={Resumed}")]
     private partial void LogStarRecovered(int paused, int resumed);
 
-    [LoggerMessage(EventId = 4230, Level = Microsoft.Extensions.Logging.LogLevel.Warning, Message = "§42.2 star-recovered resume failed; the run stays paused for the user")]
+    [LoggerMessage(EventId = 4248, Level = Microsoft.Extensions.Logging.LogLevel.Warning, Message = "§42.2 star-recovered resume failed; the run stays paused for the user")]
     private partial void LogStarRecoveryFailed(Exception exception);
 }
