@@ -112,9 +112,12 @@ public static class PlateSolveEndpoints {
 
     /// <summary>The status for <paramref name="settings"/>, with the same "directory holds files"
     /// rule the solver applies before passing <c>-d</c>
-    /// (<see cref="OpenAstroAra.PlateSolving.Solvers.AstapStarDatabase.EffectiveLocation"/>).</summary>
+    /// (<see cref="OpenAstroAra.PlateSolving.Solvers.AstapStarDatabase.EffectiveLocation"/>). Since #1136 the
+    /// scan covers the Data Manager's package subdirectories too, so a database installed from Settings → Sky
+    /// data is listed here exactly as a solve will find it.</summary>
     public static PlateSolveDatabaseStatusDto BuildDatabaseStatus(PlateSolveSettingsDto settings, Func<string, bool> fileExists) {
-        var configured = settings.IndexDownloadPath?.Trim() ?? string.Empty;
+        // A blank path reads as the default directory, the same rule the solver and the Data Manager apply (#1136).
+        var configured = SolverPathMigration.EffectiveIndexPath(settings.IndexDownloadPath);
         var solverPath = settings.PathOrEndpoint?.Trim() ?? string.Empty;
         var effective = OpenAstroAra.PlateSolving.Solvers.AstapStarDatabase.EffectiveLocation(configured);
         return new PlateSolveDatabaseStatusDto(
