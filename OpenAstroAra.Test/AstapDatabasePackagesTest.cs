@@ -222,10 +222,12 @@ namespace OpenAstroAra.Test {
 
         private static readonly IReadOnlyDictionary<string, string> NoDigests = new Dictionary<string, string>();
 
-        private DataManagerService NewService(ISkyDataFetcher fetcher, IWsBroadcaster ws, double? fov = null, Func<string, long?>? freeBytes = null) =>
+        private DataManagerService NewService(ISkyDataFetcher fetcher, IWsBroadcaster ws, double? fov = null, Func<string, long?>? freeBytes = null,
+                Func<string, string?>? writeProbe = null) =>
             new(_root, fetcher, ws, NullLogger<DataManagerService>.Instance,
                 catalog: TestCatalog, expectedDigests: NoDigests,
-                solverDataRoot: () => _solverRoot, fieldOfViewDeg: () => fov, freeBytes: freeBytes ?? (_ => null));
+                solverDataRoot: () => _solverRoot, fieldOfViewDeg: () => fov, freeBytes: freeBytes ?? (_ => null),
+                writeProbe: writeProbe ?? (_ => null));
 
         private static byte[] TarGz(params (string name, byte[] data)[] entries) {
             var ms = new MemoryStream();
@@ -399,6 +401,170 @@ namespace OpenAstroAra.Test {
                 Assert.That(File.Exists(Path.Combine(_solverRoot, "w08_0101.001")), Is.True, "a manual install is left alone");
             });
             await ((Microsoft.Extensions.Hosting.IHostedService)svc).StopAsync(CancellationToken.None);
+        }
+
+        [Test]
+        public async Task An_unwritable_install_root_is_refused_before_any_download() {
+            // #1136 leftover: a profile index path outside the unit's writable set used to fail at the staging
+            // mkdir, deep into a 1.3 GB download. The probe asks first and names the path and the reason.
+            var svc = NewService(new UnusedFetcher(), new NullBroadcaster(), writeProbe: root => root == _solverRoot ? "Read-only file system" : null);
+            InstallRootNotWritableException? ex = null;
+            try {
+                await svc.DownloadAsync(new DownloadRequestDto("astap-d80", ForceReinstall: false), null, CancellationToken.None);
+            } catch (InstallRootNotWritableException e) {
+                ex = e;
+            }
+            Assert.That(ex, Is.Not.Null);
+            Assert.That(ex!.Root, Is.EqualTo(_solverRoot));
+            Assert.That(ex.Message, Does.Contain("Read-only file system").And.Contain("astap-d80").And.Contain(_solverRoot));
+            Assert.That((await svc.GetStateAsync(CancellationToken.None)).ActiveDownloads, Is.Empty, "the claim is released");
+        }
+
+        [Test]
+        public void The_real_write_probe_passes_a_temp_directory_and_fails_an_unwritable_one() {
+            Assert.That(DataManagerService.ProbeWritable(_solverRoot), Is.Null);
+            Assert.That(DataManagerService.ProbeWritable(Path.Combine(_solverRoot, "new-subdir")), Is.Null, "a missing directory the daemon can create is fine");
+            if (!OperatingSystem.IsWindows() && Environment.UserName != "root") {
+                Assert.That(DataManagerService.ProbeWritable("/proc/openastroara-probe"), Is.Not.Null, "a directory that cannot be created names the reason");
+            }
+            Assert.That(DataManagerService.ProbeWritable("x\0y"), Is.Not.Null, "a malformed path (NUL) reads as not writable, not as a 500");
+        }
+
+        [Test]
+        public async Task A_seeded_solver_package_installs_under_the_current_root_and_is_recorded() {
+            // Solver packages are not seeded today; this keeps the seed path honest if one ever is. The seed lives
+            // under {app}/seed-data/{id}/{file name of SourceUrl}.
+            var seedDir = Path.Combine(AppContext.BaseDirectory, "seed-data", "astap-w08");
+            Directory.CreateDirectory(seedDir);
+            var seedPath = Path.Combine(seedDir, "astap-w08.tar.gz");
+            await File.WriteAllBytesAsync(seedPath, TarGz(("w08_0101.001", new byte[] { 9 })));
+            try {
+                var svc = NewService(new UnusedFetcher(), new NullBroadcaster());
+                var seeded = await svc.SeedMissingPackagesAsync(CancellationToken.None);
+                Assert.That(seeded, Is.GreaterThanOrEqualTo(1));
+                Assert.That(File.Exists(Path.Combine(_solverRoot, "astap-w08", "w08_0101.001")), Is.True, "installed under the solver root, not the sky-data root");
+                Assert.That(Directory.Exists(Path.Combine(_root, "astap-w08")), Is.False);
+                Assert.That(svc.AllInstallDirs("astap-w08"), Is.EqualTo(new[] { Path.Combine(_solverRoot, "astap-w08") }));
+                Assert.That(await File.ReadAllTextAsync(Path.Combine(_root, SolverInstallRegistry.FileName)), Does.Contain("astap-w08"), "the seed install is recorded");
+            } finally {
+                Directory.Delete(seedDir, recursive: true);
+            }
+        }
+
+        [Test]
+        public async Task A_package_installed_under_an_earlier_index_path_stays_listed_and_removable() {
+            // #1136 leftover: the profile's index path changed after D80 was installed; the 1.3 GB copy under the old
+            // path must not silently become an orphan. It is listed with its InstallPath and Remove reaches it.
+            var oldRoot = Path.Combine(_root, "astap-old");
+            var newRoot = Path.Combine(_root, "astap-new");
+            Directory.CreateDirectory(oldRoot);
+            Directory.CreateDirectory(newRoot);
+            var root = oldRoot;
+            var ws = new CapturingBroadcaster();
+            var svc = new DataManagerService(_root, new FakeSkyDataFetcher(TarGz(("d80_0101.1476", new byte[] { 1 }), ("d80_0102.1476", new byte[] { 2 }))), ws,
+                NullLogger<DataManagerService>.Instance, catalog: TestCatalog, expectedDigests: NoDigests,
+                solverDataRoot: () => root, writeProbe: _ => null, freeBytes: _ => null);
+
+            await svc.DownloadAsync(new DownloadRequestDto("astap-d80", ForceReinstall: false), null, CancellationToken.None);
+            Assert.That(await Eventually(() => ws.Events.Any(e => e.EventType == WsEventCatalog.DataManagerDownloadComplete)), Is.True);
+            Assert.That(File.Exists(Path.Combine(_root, SolverInstallRegistry.FileName)), Is.True, "the install root is recorded");
+
+            root = newRoot; // the user changed Options → Plate solving → index path
+            var listed = (await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-d80");
+            Assert.That(listed.IsInstalled, Is.True, "the earlier copy still counts");
+            Assert.That(listed.InstallPath, Is.EqualTo(Path.Combine(oldRoot, "astap-d80")), "and says where it is");
+            Assert.That(svc.InstallRootFor("astap-d80"), Is.EqualTo(newRoot), "a new download goes to the current path");
+            Assert.That(svc.AllInstallDirs("astap-d80"), Is.EqualTo(new[] { Path.Combine(oldRoot, "astap-d80") }));
+
+            Assert.That(await svc.DeleteAsync("astap-d80", CancellationToken.None), Is.EqualTo(PackageDeleteResult.Deleted));
+            Assert.That(Directory.Exists(Path.Combine(oldRoot, "astap-d80")), Is.False, "Remove reaches the earlier copy");
+            Assert.That((await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-d80").IsInstalled, Is.False);
+        }
+
+        [Test]
+        public async Task A_copy_that_predates_the_registry_is_recorded_when_listed_and_survives_a_path_change() {
+            // #1417 shipped without the registry; a D80 installed then has no record. Seeing it under the current
+            // root records it, so a later path change still lists and removes it.
+            var oldRoot = Path.Combine(_root, "astap-old");
+            var newRoot = Path.Combine(_root, "astap-new");
+            Directory.CreateDirectory(newRoot);
+            Touch(Path.Combine(oldRoot, "astap-d80"), "d80_0101.1476");
+            Touch(Path.Combine(oldRoot, "astap-d80"), SkyDataInstaller.InstalledMarkerFileName);
+            var root = oldRoot;
+            var svc = new DataManagerService(_root, new UnusedFetcher(), new NullBroadcaster(), NullLogger<DataManagerService>.Instance,
+                catalog: TestCatalog, expectedDigests: NoDigests, solverDataRoot: () => root, writeProbe: _ => null, freeBytes: _ => null);
+            Assert.That((await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-d80").IsInstalled, Is.True);
+
+            root = newRoot;
+            var listed = (await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-d80");
+            Assert.That(listed.IsInstalled, Is.True);
+            Assert.That(listed.InstallPath, Is.EqualTo(Path.Combine(oldRoot, "astap-d80")));
+        }
+
+        [Test]
+        public async Task A_304_on_a_force_reinstall_records_a_pre_registry_copy() {
+            // Round 3: a D80 installed before the registry existed, force-reinstalled (no listing first) against a
+            // CDN that answers 304, then an index-path change: the old copy must still be listed and removable.
+            var oldRoot = Path.Combine(_root, "astap-old");
+            var newRoot = Path.Combine(_root, "astap-new");
+            Directory.CreateDirectory(newRoot);
+            Touch(Path.Combine(oldRoot, "astap-d80"), "d80_0101.1476");
+            Touch(Path.Combine(oldRoot, "astap-d80"), SkyDataInstaller.InstalledMarkerFileName);
+            var root = oldRoot;
+            var ws = new CapturingBroadcaster();
+            var svc = new DataManagerService(_root, ConditionalFetcher.NotModified(), ws, NullLogger<DataManagerService>.Instance,
+                catalog: TestCatalog, expectedDigests: NoDigests, solverDataRoot: () => root, writeProbe: _ => null, freeBytes: _ => null);
+            Assert.That(svc.AllInstallDirs("astap-d80").Count, Is.EqualTo(1), "found under the current root, nothing recorded yet");
+            Assert.That(File.Exists(Path.Combine(_root, SolverInstallRegistry.FileName)), Is.False);
+
+            await svc.DownloadAsync(new DownloadRequestDto("astap-d80", ForceReinstall: true), null, CancellationToken.None);
+            Assert.That(await Eventually(() => ws.Events.Any(e => e.EventType == WsEventCatalog.DataManagerDownloadComplete)), Is.True, "304 reads as up to date");
+            Assert.That(File.Exists(Path.Combine(_root, SolverInstallRegistry.FileName)), Is.True, "the 304 path recorded the root");
+
+            root = newRoot;
+            var listed = (await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-d80");
+            Assert.That(listed.IsInstalled, Is.True);
+            Assert.That(listed.InstallPath, Is.EqualTo(Path.Combine(oldRoot, "astap-d80")));
+            Assert.That(await svc.DeleteAsync("astap-d80", CancellationToken.None), Is.EqualTo(PackageDeleteResult.Deleted));
+            Assert.That(Directory.Exists(Path.Combine(oldRoot, "astap-d80")), Is.False);
+        }
+
+        [Test]
+        public void Roots_compare_by_normalised_full_path() {
+            Assert.That(SolverInstallRegistry.SameRoot(_solverRoot, _solverRoot + Path.DirectorySeparatorChar), Is.True, "a trailing separator is the same directory");
+            Assert.That(SolverInstallRegistry.SameRoot(_solverRoot, Path.Combine(_solverRoot, "x")), Is.False);
+        }
+
+        [Test]
+        public async Task A_re_download_after_a_path_change_lands_under_the_current_path_and_updates_the_record() {
+            var oldRoot = Path.Combine(_root, "astap-old");
+            var newRoot = Path.Combine(_root, "astap-new");
+            Directory.CreateDirectory(oldRoot);
+            Directory.CreateDirectory(newRoot);
+            var root = oldRoot;
+            var ws = new CapturingBroadcaster();
+            var svc = new DataManagerService(_root, new FakeSkyDataFetcher(TarGz(("w08_0101.001", new byte[] { 1 }))), ws,
+                NullLogger<DataManagerService>.Instance, catalog: TestCatalog, expectedDigests: NoDigests,
+                solverDataRoot: () => root, writeProbe: _ => null, freeBytes: _ => null);
+            await svc.DownloadAsync(new DownloadRequestDto("astap-w08", ForceReinstall: false), null, CancellationToken.None);
+            Assert.That(await Eventually(() => ws.Events.Count(e => e.EventType == WsEventCatalog.DataManagerDownloadComplete) == 1), Is.True);
+
+            root = newRoot;
+            // Not "already installed": the current path has no copy, so a plain download (no force) is accepted —
+            // the earlier copy is not where the solver looks now.
+            await svc.DownloadAsync(new DownloadRequestDto("astap-w08", ForceReinstall: false), null, CancellationToken.None);
+            Assert.That(await Eventually(() => ws.Events.Count(e => e.EventType == WsEventCatalog.DataManagerDownloadComplete) == 2), Is.True);
+
+            Assert.That(File.Exists(Path.Combine(newRoot, "astap-w08", "w08_0101.001")), Is.True);
+            var listed = (await svc.ListPackagesAsync(CancellationToken.None)).Single(p => p.Id == "astap-w08");
+            Assert.That(listed.InstallPath, Is.EqualTo(Path.Combine(newRoot, "astap-w08")), "the current copy wins the listing");
+            Assert.That(svc.AllInstallDirs("astap-w08"), Is.EquivalentTo(new[] { Path.Combine(newRoot, "astap-w08"), Path.Combine(oldRoot, "astap-w08") }), "both copies are remembered");
+
+            // Remove frees the disk everywhere: the current copy and the remembered earlier one.
+            Assert.That(await svc.DeleteAsync("astap-w08", CancellationToken.None), Is.EqualTo(PackageDeleteResult.Deleted));
+            Assert.That(Directory.Exists(Path.Combine(oldRoot, "astap-w08")), Is.False, "the earlier copy is freed too");
+            Assert.That(Directory.Exists(Path.Combine(newRoot, "astap-w08")), Is.False);
+            Assert.That(svc.AllInstallDirs("astap-w08"), Is.Empty);
         }
 
         [Test]
