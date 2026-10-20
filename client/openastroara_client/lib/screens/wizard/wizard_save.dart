@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 // The draft declares its own `ImagingDefaults` / `PlateSolveSettings` /
 // `AutofocusSettings` bags; we map onto the profile *section* types from the
@@ -8,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import '../../models/profile_draft.dart'
     hide ImagingDefaults, PlateSolveSettings, AutofocusSettings, SafetyPolicies;
 import '../../services/profile_api.dart';
+import '../../state/profile_management_state.dart';
 import '../../util/guide_optics.dart';
 import '../../util/host_port.dart';
 import '../../widgets/guider/guider_setup_wizard.dart'
@@ -112,12 +114,21 @@ OpticsSettings applyDraftToOptics(OpticsSettings base, ProfileDraft d) {
   final fl = d.telescope.focalLengthMm;
   final ap = d.telescope.apertureMm;
   final px = d.camera.pixelSizeMicrons;
+  final reducer = d.telescope.reducerFactor;
+  final sw = d.camera.sensorWidthPx;
+  final sh = d.camera.sensorHeightPx;
   return base.copyWith(
     focalLengthMm: (fl != null && fl > 0) ? fl : null,
     // NEXTGEN §4: the telescope screen has always asked for the aperture; the
     // optics section can now store it (it feeds the Optimal-Sub sky-flux term).
     apertureMm: (ap != null && ap > 0) ? ap : null,
     pixelSizeUm: (px != null && px > 0) ? px : null,
+    // §36.10 — the reducer the telescope step collected and the sensor size the
+    // camera reported; null keeps the base value (the daemon also fills the
+    // sensor on first connect).
+    reducerFactor: (reducer != null && reducer > 0) ? reducer : null,
+    sensorWidthPx: (sw != null && sw > 0) ? sw : null,
+    sensorHeightPx: (sh != null && sh > 0) ? sh : null,
   );
 }
 
@@ -144,6 +155,26 @@ ImagingDefaults applyDraftToImaging(ImagingDefaults base, ProfileDraft d) {
   );
 }
 
+/// §36.10 — new wizard profiles clone the active profile, so an untouched
+/// reducer field must show (and Save must keep) that profile's reducer, not
+/// 1×. Seeding the draft once makes the equipment helper, the review row, the
+/// recommendation and Save read the same number. Returns the seeded value, or
+/// null when the draft already had one or there is no rig to read (offline:
+/// the draft stays null and Save keeps whatever the profile has).
+Future<double?> seedReducerFromBaseProfile(WidgetRef ref, ProfileDraft draft) async {
+  if (draft.telescope.reducerFactor != null) return null;
+  final api = ref.read(profileApiProvider);
+  if (api == null) return null;
+  try {
+    final base = (await api.getOptics()).reducerFactor;
+    if (base <= 0 || draft.telescope.reducerFactor != null) return null;
+    draft.telescope.reducerFactor = base;
+    return base;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// §63.19 — the guide-setup type the wizard should ACT on: the draft's pick
 /// when the user touched the dropdown, else the base profile's value (new
 /// wizard profiles clone the active profile, so an untouched dropdown means
@@ -158,17 +189,17 @@ Phd2Settings applyDraftToPhd2(Phd2Settings base, ProfileDraft d,
     {OpticsSettings? baseOptics}) {
   final g = d.guider;
   // §63.19 — with an OAG the guide focal length is derived from the main
-  // optics: the telescope screen's focal length × the base profile's optics
-  // reducer factor (the wizard collects no reducer of its own; the base
-  // section is the source, falling back to 1.0 when it's unset/invalid).
-  // 0/unset telescope focal length maps to null = keep the base value.
+  // optics: the telescope screen's focal length × the reducer factor the
+  // telescope step collected (falling back to the base profile's optics, then
+  // 1.0, when the user left it untouched). 0/unset telescope focal length maps
+  // to null = keep the base value.
   final setupType = g.setupType == null
       ? null
       : Phd2SettingsNotifier.normalizeGuiderSetupType(g.setupType!);
   final effectiveType = resolveGuiderSetupType(g.setupType, base.guiderSetupType);
   int? focalLength;
   if (effectiveType == 'oag') {
-    final reducer = effectiveOagReducerFactor(baseOptics?.reducerFactor);
+    final reducer = effectiveOagReducerFactor(d.telescope.reducerFactor ?? baseOptics?.reducerFactor);
     final derived =
         derivedOagGuideFocalLength(d.telescope.focalLengthMm ?? 0, reducer);
     focalLength = derived == 0 ? null : derived;
@@ -376,9 +407,10 @@ Future<void> saveWizardProfile(ProfileApi api, ProfileDraft d) async {
     _trySave(() async => api.putOptics(applyDraftToOptics(await api.getOptics(), d))),
     _trySave(() async =>
         api.putImagingDefaults(applyDraftToImaging(await api.getImagingDefaults(), d))),
-    // §63.19 — the OAG derivation needs the base optics reducer factor; the
-    // draft never writes the reducer, so reading it concurrently with the
-    // optics-section save above is race-free.
+    // §63.19 — the OAG derivation needs the base optics reducer factor only
+    // when the draft has none (§36.10: a set draft reducer wins), so reading
+    // it concurrently with the optics-section save above is race-free either
+    // way.
     _trySave(() async => api.putPhd2Settings(applyDraftToPhd2(
         await api.getPhd2Settings(), d,
         baseOptics: await api.getOptics()))),

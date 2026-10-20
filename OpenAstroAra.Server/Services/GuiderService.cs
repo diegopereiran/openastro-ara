@@ -51,6 +51,23 @@ namespace OpenAstroAra.Server.Services;
 /// </summary>
 public sealed partial class GuiderService : IGuiderService, IDisposable {
 
+    /// <inheritdoc/>
+    public async Task<(int Width, int Height)?> TryGetGuideFrameSizeAsync(CancellationToken ct) {
+        try {
+            var guider = RequireConnectedGuider();
+            return await guider.GetCameraFrameSizeAsync(ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // Not connected, or PHD2 dropped between the check and the RPC: the wizard then recommends
+            // from the main camera only rather than failing the whole request.
+            LogGuideFrameSizeUnavailable(ex);
+            return null;
+        }
+    }
+
+    [LoggerMessage(EventId = 6368, Level = LogLevel.Debug, Message = "§36.10 guide frame size unavailable; recommending from the main camera only")]
+    private partial void LogGuideFrameSizeUnavailable(Exception exception);
+
+
     private readonly ILogger<GuiderService> _logger;
     private readonly IProfileService _profileService;
     // §63.6: WS sink for guider.dark_library.* events. Optional so the service composes in tests without a hub.

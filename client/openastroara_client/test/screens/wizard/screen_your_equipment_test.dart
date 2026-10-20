@@ -14,6 +14,9 @@ import 'package:openastroara/services/focuser_props_api.dart';
 import 'package:openastroara/services/rotator_props_api.dart';
 import 'package:openastroara/services/saved_server_service.dart';
 import 'package:openastroara/services/telescope_optics_api.dart';
+import 'package:openastroara/services/profile_api.dart';
+import 'package:openastroara/state/profile_management_state.dart';
+import 'package:openastroara/state/settings/optics_settings_state.dart';
 import 'package:openastroara/state/saved_server_state.dart';
 import 'package:openastroara/state/settings/equipment_connection_state.dart';
 import 'package:openastroara/state/wizard/equipment_readiness_state.dart';
@@ -100,8 +103,11 @@ Future<ProviderContainer> _pump(
   CameraGeometry? camera,
   TelescopeOptics? optics,
   MountProps? mount,
+  OpticsSettings? baseOptics,
 }) async {
   final container = ProviderContainer(overrides: [
+    if (baseOptics != null)
+      profileApiProvider.overrideWithValue(_OpticsOnlyProfileApi(baseOptics)),
     savedServerServiceProvider.overrideWithValue(_FakeSavedServerService()),
     equipmentDiscoveryApiFactoryProvider
         .overrideWithValue((_) => _FakeDiscoveryApi(byType)),
@@ -188,6 +194,69 @@ void main() {
         findsOneWidget);
   });
 
+  testWidgets('an untouched reducer field is seeded from the cloned profile, and blank means an explicit 1× (§36.10)',
+      (tester) async {
+    // New wizard profiles clone the active profile: with a 0.8× reducer there,
+    // an untouched field must show 0.8× (and Save keeps 0.8), never 1×.
+    final byType = {
+      EquipmentDeviceType.mount: [
+        _device(EquipmentDeviceType.mount, 'mnt-1', 'iOptron CEM70'),
+      ],
+    };
+    final container = await _pump(tester, byType: byType, mount: const MountProps(),
+        baseOptics: const OpticsSettings(reducerFactor: 0.8));
+    final draft = container.read(wizardControllerProvider).draft;
+    draft.telescope.focalLengthMm = 2032;
+    expect(draft.telescope.reducerFactor, 0.8,
+        reason: 'seeded on entry, before Details is ever opened, so the review row and Save agree');
+    await tester.ensureVisible(find.text('Details').first);
+    await tester.tap(find.text('Details').first);
+    await tester.pumpAndSettle();
+
+    expect(draft.telescope.reducerFactor, 0.8, reason: 'seeded from the base profile');
+    expect(tester.widget<TextField>(find.byKey(const ValueKey('details-mount-reducer'))).controller!.text, '0.8');
+    expect(find.textContaining('1626 mm'), findsOneWidget, reason: '2032 × 0.8, what Save will write');
+
+    // Clearing the field means "no reducer": an explicit 1×, not "keep 0.8".
+    await tester.enterText(find.byKey(const ValueKey('details-mount-reducer')), '');
+    await tester.pumpAndSettle();
+    expect(draft.telescope.reducerFactor, 1.0);
+    expect(find.textContaining('2032 mm'), findsOneWidget);
+  });
+
+  testWidgets('the reducer field and its quick picks write the draft and show the effective focal length (§36.10)',
+      (tester) async {
+    final byType = {
+      EquipmentDeviceType.mount: [
+        _device(EquipmentDeviceType.mount, 'mnt-1', 'iOptron CEM70'),
+      ],
+    };
+    final container = await _pump(tester, byType: byType, mount: const MountProps());
+    final draft = container.read(wizardControllerProvider).draft;
+    draft.telescope.focalLengthMm = 2032;
+    await tester.ensureVisible(find.text('Details').first);
+    await tester.tap(find.text('Details').first);
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const ValueKey('details-mount-reducer-0.63')));
+    await tester.tap(find.byKey(const ValueKey('details-mount-reducer-0.63')));
+    await tester.pumpAndSettle();
+    expect(draft.telescope.reducerFactor, 0.63);
+    expect(find.textContaining('1280 mm'), findsOneWidget, reason: '2032 × 0.63 effective focal length');
+
+    // Any factor, not just the chips: a 2× Barlow.
+    await tester.enterText(find.byKey(const ValueKey('details-mount-reducer')), '2');
+    await tester.pumpAndSettle();
+    expect(draft.telescope.reducerFactor, 2);
+    expect(find.textContaining('4064 mm'), findsOneWidget);
+
+    // Out of range is refused, says so, and leaves the last good value.
+    await tester.enterText(find.byKey(const ValueKey('details-mount-reducer')), '9');
+    await tester.pumpAndSettle();
+    expect(draft.telescope.reducerFactor, 2);
+    expect(find.textContaining('between 0.1 and 5×'), findsOneWidget);
+  });
+
   // #1298: discovery always lists the daemon's manual filter wheel, so it
   // must not count toward the one-device auto-assign or be assigned by itself.
   final manualWheel = _device(EquipmentDeviceType.filterWheel,
@@ -243,4 +312,18 @@ void main() {
     expect(draft.equipment.focuserDeviceId, isNull,
         reason: 'auto-assign runs once per wizard session');
   });
+}
+
+/// The base profile the wizard clones from, as far as the reducer field reads
+/// it (only `getOptics` is called; anything else is a test bug).
+class _OpticsOnlyProfileApi implements ProfileApi {
+  _OpticsOnlyProfileApi(this.optics);
+  final OpticsSettings optics;
+
+  @override
+  Future<OpticsSettings> getOptics() async => optics;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName} is not used by the reducer field');
 }
