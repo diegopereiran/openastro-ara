@@ -29,11 +29,13 @@
 #
 # Bench overrides (#1248): FSTAB and FSTAB_LOCK point the fstab rebuild at scratch
 # files, and --fstab-entry runs ONLY that rebuild (no device lookup, no mount), so
-# scripts/tests can race six rebuilds against one scratch fstab. sudoers keeps
-# env_reset, so the daemon user cannot steer root's run with either variable.
+# scripts/tests can race six rebuilds against one scratch fstab. ARA_MOUNT_POINT
+# moves the store path so scripts/tests can drive a drive switch against stand-in
+# mount tools. sudoers keeps env_reset (and the unit passes no environment), so the
+# daemon user cannot steer root's run with any of these variables.
 set -eu
 
-MOUNT_POINT=/media/openastroara
+MOUNT_POINT=${ARA_MOUNT_POINT:-/media/openastroara}
 FSTAB=${FSTAB:-/etc/fstab}
 OWNER=${ARA_STORAGE_OWNER:-openastroara}
 # Dev rigs run the daemon as a regular user without the .deb's service
@@ -114,7 +116,7 @@ ensure_fstab_entry() { # $1=uuid $2=fstype
     # itself, so the rename below never replaces the locked inode out from under the
     # other holder. flock(1) is util-linux, present on every supported image; a box
     # without it degrades to the unlocked rebuild.
-    tmp=$(mktemp "${FSTAB}.ara-XXXXXX") || { echo "ERROR: fstab_tmp_failed"; exit 8; }
+    tmp=$(mktemp "${FSTAB}.ara-XXXXXX") || { remount_unchanged_store; echo "ERROR: fstab_tmp_failed"; exit 8; }
     # An early exit between here and the rename (id lookup failing under set -e, the
     # lock timing out) must not leave a uniquely named temp file beside fstab.
     trap 'rm -f "$tmp"' EXIT
@@ -126,15 +128,17 @@ ensure_fstab_entry() { # $1=uuid $2=fstype
     # opened — one unlocked rebuild beats a silent death with the temp file in place.
     if command -v flock >/dev/null 2>&1 && ( exec 9>"$lockpath" ) 2>/dev/null; then
         exec 9>"$lockpath"
-        flock -w 30 9 || { rm -f "$tmp"; echo "ERROR: fstab_locked"; exit 8; }
+        flock -w 30 9 || { rm -f "$tmp"; remount_unchanged_store; echo "ERROR: fstab_locked"; exit 8; }
         lockfd=9
     elif command -v flock >/dev/null 2>&1; then
         echo "WARN: fstab_lock_unavailable $lockpath" >&2
     fi
-    rc=0
-    grep -v "[[:space:]]${MOUNT_POINT}[[:space:]]" "$FSTAB" > "$tmp" || rc=$?
-    if [ "$rc" -gt 1 ]; then
+    # Its own name: the --check path keeps fsck's exit code in rc across this call.
+    grep_rc=0
+    grep -v "[[:space:]]${MOUNT_POINT}[[:space:]]" "$FSTAB" > "$tmp" || grep_rc=$?
+    if [ "$grep_rc" -gt 1 ]; then
         rm -f "$tmp"
+        remount_unchanged_store
         echo "ERROR: fstab_unreadable"
         exit 8
     fi
@@ -157,17 +161,85 @@ ensure_fstab_entry() { # $1=uuid $2=fstype
     systemctl daemon-reload 2>/dev/null || true
 }
 
-mount_and_own() { # $1=uuid $2=fstype $3=deep-chown (1 after mkfs, else top-level only)
+# Canonical node for a device path, so a /dev/disk/by-* link compares equal to
+# the /dev/sdX1 findmnt reports. Empty in, empty out.
+canon() {
+    [ -n "$1" ] || return 0
+    readlink -f "$1" 2>/dev/null || echo "$1"
+}
+
+# The device mounted on top of the store path; empty when nothing is. findmnt
+# lists stacked mounts in mountinfo order, so the last line is the top layer.
+# Only that layer is ever released; a stale layer underneath stays mounted but
+# is never what the store path resolves to.
+store_holder() {
+    canon "$(findmnt -no SOURCE "$MOUNT_POINT" 2>/dev/null | tail -n1 || true)"
+}
+
+# Switching drives: a different disk still mounted at the store path comes off
+# BEFORE fstab is repointed (skipping the mount whenever anything held the path
+# reported OK while frames kept landing on the previous drive). A busy previous
+# store refuses with fstab and the mount both untouched. The drive taken off is
+# remembered so a switch that fails later can put it back.
+PREV_UUID=
+PREV_FS=
+release_previous_store() { # $1=device about to become the store
+    held=$(store_holder)
+    if [ -z "$held" ] || [ "$held" = "$(canon "$1")" ]; then
+        return 0
+    fi
+    prev_uuid=$(value_for "$held" UUID)
+    prev_fs=$(value_for "$held" TYPE)
+    sync
+    if ! umount "$MOUNT_POINT" 2>/dev/null; then
+        echo "ERROR: device_busy previous_store"
+        exit 5
+    fi
+    PREV_UUID=$prev_uuid
+    PREV_FS=$prev_fs
+}
+
+# A switch that failed after the previous store came off: point fstab back at
+# that drive and remount it, best effort, so frames never fall through to the
+# bare directory on the system disk. The rebuild runs in a subshell because it
+# exits on its own failures, and the caller still has its typed error to print.
+restore_previous_store() {
+    [ -n "$PREV_UUID" ] || return 0
+    case "$PREV_FS" in exfat|ext4) ;; *) return 0 ;; esac
+    ( ensure_fstab_entry "$PREV_UUID" "$PREV_FS" ) >/dev/null 2>&1 || return 0
+    mount "$MOUNT_POINT" 2>/dev/null || true
+}
+
+# The fstab rebuild itself failed after the previous store came off. fstab was
+# not touched, so it still names that drive and a plain mount puts it back.
+remount_unchanged_store() {
+    [ -n "$PREV_UUID" ] || return 0
+    mount "$MOUNT_POINT" 2>/dev/null || true
+}
+
+mount_and_own() { # $1=uuid $2=fstype $3=deep-chown (1 after mkfs, else top-level only) $4=device
     uuid=$1
     fstype=$2
     deep=${3:-0}
+    device=$(canon "$4")
     mkdir -p "$MOUNT_POINT"
+    release_previous_store "$device"
     ensure_fstab_entry "$uuid" "$fstype"
-    if ! findmnt -no SOURCE "$MOUNT_POINT" >/dev/null 2>&1; then
+    if [ "$(store_holder)" != "$device" ]; then
         if ! mount "$MOUNT_POINT" 2>/dev/null; then
+            restore_previous_store
             echo "ERROR: mount_failed"
             exit 8
         fi
+    fi
+    # Whatever is on top of the store path now must be this drive — an older mount
+    # stacked underneath, or a mount that resolved somewhere else, is not the store
+    # the caller asked for.
+    if [ "$(store_holder)" != "$device" ]; then
+        umount "$MOUNT_POINT" 2>/dev/null || true
+        restore_previous_store
+        echo "ERROR: mount_failed wrong_device"
+        exit 8
     fi
     # exFAT ownership comes from the mount options above; chown is not a
     # thing there (it would fail with EPERM on every file).
@@ -263,6 +335,12 @@ fi
 if [ "$CHECK" -eq 1 ]; then
     FS=$(value_for "$DEVICE" TYPE)
     case "$FS" in exfat|ext4) ;; *) echo "ERROR: not_ext4 ${FS:-unknown}"; exit 3 ;; esac
+    # Only the store (mounted there now, or named in fstab after an eject) is
+    # remounted afterwards. Remounting any other checked disk would quietly make
+    # it the store, unmounting the real one.
+    WAS_STORE=0
+    [ "$(store_holder)" = "$(canon "$DEVICE")" ] && WAS_STORE=1
+    grep -q "^UUID=${UUID}[[:space:]][[:space:]]*${MOUNT_POINT}[[:space:]]" "$FSTAB" 2>/dev/null && WAS_STORE=1
     # fsck needs the filesystem quiet — unmount, check, remount. A busy
     # mount (something holding files open) refuses rather than forcing.
     if findmnt -no TARGET "$DEVICE" >/dev/null 2>&1; then
@@ -286,11 +364,16 @@ if [ "$CHECK" -eq 1 ]; then
         echo "ERROR: fsck_failed exit=$rc"
         exit 11
     fi
-    mount_and_own "$UUID" "$FS" 0
+    if [ "$WAS_STORE" -eq 1 ]; then
+        mount_and_own "$UUID" "$FS" 0 "$DEVICE"
+    fi
+    # A disk that is not the store stays unmounted, so the line names the disk.
+    WHERE=$MOUNT_POINT
+    [ "$WAS_STORE" -eq 1 ] || WHERE=$DEVICE
     if [ "$rc" -ge 1 ]; then
-        echo "OK $MOUNT_POINT checked repaired"
+        echo "OK $WHERE checked repaired"
     else
-        echo "OK $MOUNT_POINT checked clean"
+        echo "OK $WHERE checked clean"
     fi
     exit 0
 fi
@@ -314,10 +397,18 @@ if [ "$FORMAT" -eq 1 ]; then
     if [ "$(lsblk -no TYPE "$DEVICE" 2>/dev/null | head -n1)" = "part" ]; then
         DEVICE=$(base_disk "$DEVICE")
     fi
+    # A different drive holding the store comes off BEFORE anything is erased, so
+    # a busy one refuses while the confirmed disk is still intact. A piece of the
+    # disk being erased (reformatting the store itself) is left to the loop below.
+    held=$(store_holder)
+    if [ -n "$held" ] && [ "$(base_disk "$held")" != "$(base_disk "$DEVICE")" ]; then
+        release_previous_store "$DEVICE"
+    fi
     # Unmount every mounted piece of the disk before touching it.
     for m in $(lsblk -lno PATH "$DEVICE" 2>/dev/null); do
         if findmnt -no TARGET "$m" >/dev/null 2>&1; then
             if ! umount "$m" 2>/dev/null; then
+                restore_previous_store
                 echo "ERROR: device_busy"
                 exit 5
             fi
@@ -341,6 +432,7 @@ if [ "$FORMAT" -eq 1 ]; then
         PTYPE=0FC63DAF-8483-4772-8E79-3D69D8477DE4   # Linux filesystem
         [ "$NEW_FS" = "exfat" ] && PTYPE=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7  # Microsoft basic data
         if ! printf 'label: gpt\ntype=%s\n' "$PTYPE" | sfdisk --quiet --wipe always "$DEVICE" >/dev/null 2>&1; then
+            restore_previous_store
             echo "ERROR: mkfs_failed partition_table"
             exit 7
         fi
@@ -356,6 +448,7 @@ if [ "$FORMAT" -eq 1 ]; then
             i=$((i + 1))
         done
         if [ ! -b "$PART" ]; then
+            restore_previous_store
             echo "ERROR: mkfs_failed partition_node_missing"
             exit 7
         fi
@@ -363,17 +456,18 @@ if [ "$FORMAT" -eq 1 ]; then
         wipefs -a "$DEVICE" >/dev/null 2>&1 || true
     fi
     if [ "$NEW_FS" = "exfat" ]; then
-        mkfs.exfat -L "ARA-DISK" "$DEVICE" >/dev/null 2>&1 || { echo "ERROR: mkfs_failed"; exit 7; }
+        mkfs.exfat -L "ARA-DISK" "$DEVICE" >/dev/null 2>&1 || { restore_previous_store; echo "ERROR: mkfs_failed"; exit 7; }
     else
-        mkfs.ext4 -F -L "ARA-DISK" "$DEVICE" >/dev/null 2>&1 || { echo "ERROR: mkfs_failed"; exit 7; }
+        mkfs.ext4 -F -L "ARA-DISK" "$DEVICE" >/dev/null 2>&1 || { restore_previous_store; echo "ERROR: mkfs_failed"; exit 7; }
     fi
     # mkfs assigns a NEW uuid — fstab must pin that one, not the old one.
     UUID=$(value_for "$DEVICE" UUID)
     if [ -z "$UUID" ]; then
+        restore_previous_store
         echo "ERROR: uuid_not_found"
         exit 2
     fi
-    mount_and_own "$UUID" "$NEW_FS" 1
+    mount_and_own "$UUID" "$NEW_FS" 1 "$DEVICE"
     echo "OK $MOUNT_POINT $UUID"
     exit 0
 fi
@@ -396,6 +490,6 @@ if [ -z "$UUID" ]; then
     echo "ERROR: uuid_not_found"
     exit 2
 fi
-mount_and_own "$UUID" "$FS" 0
+mount_and_own "$UUID" "$FS" 0 "$DEVICE"
 echo "OK $MOUNT_POINT"
 exit 0
