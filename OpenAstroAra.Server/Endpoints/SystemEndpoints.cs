@@ -82,9 +82,19 @@ public static class SystemEndpoints {
 
         // Phase 13.9 — wired to IBugReportService (placeholder).
         bug.MapPost("/prepare",
-                async ([FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, IBugReportService svc, CancellationToken ct) =>
-                    Results.Accepted(value: await svc.PrepareAsync(idempotencyKey, ct)))
+                async ([FromBody] BugReportPrepareRequestDto? request, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, IBugReportService svc, CancellationToken ct) => {
+                    // §54.3 — the sharing mode is applied while the bundle is built; an unknown value is a
+                    // client bug, not something to silently build "full" for.
+                    var mode = BugReportRedactor.Parse(request?.Mode);
+                    if (mode is null) {
+                        return Results.Problem($"Unknown bug-report sharing mode '{request?.Mode}'; expected full, coarse_gps or redacted.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    }
+                    return Results.Accepted(value: await svc.PrepareAsync(idempotencyKey, ct, mode.Value));
+                })
+           .Accepts<BugReportPrepareRequestDto>("application/json")
            .Produces<BugReportPreparationDto>(StatusCodes.Status202Accepted)
+           .ProducesProblem(StatusCodes.Status400BadRequest)
            .WithName("PrepareBugReport");
 
         bug.MapGet("/download",
@@ -100,10 +110,11 @@ public static class SystemEndpoints {
                             type: "https://openastro.net/errors/bugreport-pii-ack-required",
                             title: "Bug-report download requires PII acknowledgement",
                             statusCode: StatusCodes.Status403Forbidden,
-                            detail: "The bug-report bundle contains the daemon logs, the full profile.json " +
-                                "(which may include equipment credentials, API/notification tokens, precise " +
-                                "observatory coordinates, and network endpoints), and a system-info.json with " +
-                                "the local filesystem path. Show the user this disclosure, then re-request " +
+                            detail: "The bug-report bundle contains the daemon logs, profile.json and a " +
+                                "system-info.json. In the default (full) sharing mode that includes equipment " +
+                                "credentials, API/notification tokens, precise observatory coordinates, network " +
+                                "endpoints and the local filesystem path; the coarse_gps and redacted modes scrub " +
+                                "some or all of those (§54.5). Show the user this disclosure, then re-request " +
                                 "with ?acknowledge=pii to download.");
                     }
                     var result = await svc.OpenDownloadAsync(preparationId, ct);

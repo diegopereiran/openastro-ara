@@ -35,15 +35,18 @@ class _FakeBugReportClient implements BugReportClient {
   int prepareCalls = 0;
   int downloadCalls = 0;
   String? lastDownloadId;
+  String? lastMode;
 
   @override
-  Future<BugReportPreparation> prepare() async {
+  Future<BugReportPreparation> prepare({String mode = 'full'}) async {
     prepareCalls++;
+    lastMode = mode;
     if (throwOnPrepare) throw Exception('prepare boom');
-    return const BugReportPreparation(
+    return BugReportPreparation(
       preparationId: 'abc-123',
       status: 'ready',
       estimatedSizeBytes: 262144,
+      sharingMode: mode, // the daemon echoes the mode it built with
     );
   }
 
@@ -95,6 +98,57 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Prepare & download'), findsOneWidget);
   });
 
+  testWidgets('the sharing mode is sent to prepare; everything is the default', (tester) async {
+    // §54.3 — the mode is chosen before the bundle is built.
+    final api = _FakeBugReportClient();
+    await tester.pumpWidget(_host(api));
+    expect(find.text('Include everything'), findsOneWidget, reason: 'the spec default');
+
+    // Explicit pumps, as in the test below: the busy spinner animates while the dialog is open.
+    await tester.tap(find.widgetWithText(FilledButton, 'Prepare & download'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(api.lastMode, 'full');
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Redact all sensitive items').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Prepare & download'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(api.lastMode, 'redacted');
+    expect(api.prepareCalls, 2);
+    // The PII gate's wording follows the mode the daemon built with.
+    expect(find.textContaining('scrubbed'), findsNWidgets(2), reason: 'profile and system-info bullets say what was scrubbed');
+    expect(find.textContaining('username scrubbed from its path'), findsOneWidget);
+    expect(find.textContaining('full profile'), findsNothing);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  });
+
+  testWidgets('coarse GPS mode says the site is rounded', (tester) async {
+    final api = _FakeBugReportClient();
+    await tester.pumpWidget(_host(api));
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Coarse GPS only').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Prepare & download'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(api.lastMode, 'coarse_gps');
+    expect(find.textContaining('rounded to ~111 km'), findsOneWidget);
+    expect(find.textContaining('full profile'), findsNothing);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  });
+
   testWidgets('prepare then cancel does not download', (tester) async {
     final api = _FakeBugReportClient();
     await tester.pumpWidget(_host(api));
@@ -105,9 +159,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
 
-    // The PII disclosure dialog is shown before any download.
+    // The PII disclosure dialog is shown before any download; full mode names the full profile.
     expect(find.text('Before you share this bug report'), findsOneWidget);
     expect(find.textContaining('full profile'), findsOneWidget);
+    expect(find.textContaining('scrubbed'), findsNothing);
     expect(api.prepareCalls, 1);
     expect(api.downloadCalls, 0);
 

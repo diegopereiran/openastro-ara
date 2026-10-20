@@ -29,15 +29,24 @@ class BugReportCard extends ConsumerStatefulWidget {
   ConsumerState<BugReportCard> createState() => _BugReportCardState();
 }
 
+/// §54.3 sharing modes, in the order the review modal lists them.
+const bugReportSharingModes = <(String wire, String label, String detail)>[
+  ('full', 'Include everything', 'best for debugging'),
+  ('coarse_gps', 'Coarse GPS only', 'site rounded to ~111 km'),
+  ('redacted', 'Redact all sensitive items', 'coordinates, serials, hostnames, usernames in paths, private IPs, tokens'),
+];
+
 class _BugReportCardState extends ConsumerState<BugReportCard> {
   bool _busy = false;
+  // §54.3 — the spec's default is "Include everything"; the user picks before preparing.
+  String _mode = 'full';
 
   Future<void> _run() async {
     final api = ref.read(bugReportApiProvider);
     if (api == null) return;
     setState(() => _busy = true);
     try {
-      final prep = await api.prepare();
+      final prep = await api.prepare(mode: _mode);
       if (!mounted) return;
 
       // PII gate: the user must see what's in the bundle before it's downloaded.
@@ -104,11 +113,23 @@ class _BugReportCardState extends ConsumerState<BugReportCard> {
             const Text('The bundle contains:'),
             const SizedBox(height: 8),
             const Text('• Ara\'s recent log files'),
-            const Text(
+            Text(switch (prep.sharingMode) {
+              'redacted' =>
+                '• your profile with coordinates, serial numbers, hostnames, '
+                    'usernames in paths, private network addresses and tokens '
+                    'scrubbed',
+              'coarse_gps' =>
+                '• your profile with the site rounded to ~111 km — it may still '
+                    'include equipment credentials, API / notification tokens '
+                    'and network addresses',
+              _ =>
                 '• your full profile — which may include equipment credentials, '
-                'API / notification tokens, precise observatory coordinates, and '
-                'network addresses'),
-            const Text('• system info, including this device\'s filesystem path'),
+                    'API / notification tokens, precise observatory coordinates, and '
+                    'network addresses',
+            }),
+            Text(prep.sharingMode == 'redacted'
+                ? '• system info, with this device\'s username scrubbed from its path'
+                : '• system info, including this device\'s filesystem path'),
             const Text(
                 '• this app\'s own error log, saved as a separate file beside '
                 'the ZIP'),
@@ -162,6 +183,30 @@ class _BugReportCardState extends ConsumerState<BugReportCard> {
                     'Bundles Ara logs + your profile + system info into a '
                     'ZIP you can attach to a report.',
                     style: theme.textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 4),
+                  // §54.3 sharing mode: chosen before the bundle is built, so the
+                  // ZIP the user downloads never held what the mode scrubs.
+                  Row(
+                    children: [
+                      Text('Sharing: ', style: theme.textTheme.bodySmall),
+                      Flexible(
+                        child: DropdownButton<String>(
+                          value: _mode,
+                          isDense: true,
+                          isExpanded: true,
+                          style: theme.textTheme.bodySmall,
+                          onChanged: _busy ? null : (v) => setState(() => _mode = v ?? 'full'),
+                          items: [
+                            for (final m in bugReportSharingModes)
+                              DropdownMenuItem(
+                                value: m.$1,
+                                child: Tooltip(message: m.$3, child: Text(m.$2, overflow: TextOverflow.ellipsis)),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
