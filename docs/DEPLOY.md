@@ -19,7 +19,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/opena
   | sudo tee /etc/apt/sources.list.d/openastro.list
 sudo apt update
 
-# 2. Install (apt resolves libcfitsio10 and astap-cli transitively)
+# 2. Install (apt resolves libcfitsio10 transitively; the ASTAP solver is bundled)
 sudo apt install openastroara-server
 
 # 3. Star database for the plate solver (one-time, ~1.7 GB). ASTAP's D80 covers the
@@ -59,9 +59,9 @@ and `sudo apt install ./openastroara-server_<version>_arm64.deb` on the Pi.
 
 | Path | Purpose | Owner |
 |---|---|---|
-| `/opt/openastroara/` | Self-contained .NET runtime + `OpenAstroAra.Server` binary + the `liberfa.so` / `libsupernovas.so` astrometry natives | `openastroara:openastroara` |
+| `/opt/openastroara/` | Self-contained .NET runtime + `OpenAstroAra.Server` binary + the `liberfa.so` / `libsupernovas.so` astrometry natives + the bundled multi-core `astap_cli` plate solver | `openastroara:openastroara` |
 | `/dev/shm/openastroara/PlateSolver/` | The frame handed to the solver, one per solve (RAM; falls back to the service's local app-data folder when `/dev/shm` is unavailable) | `openastroara:openastroara` |
-| `/var/lib/astap/` | ASTAP star database (you download it, step 3 above; the solver binary itself is the `astap-cli` package) | `openastroara:openastroara` |
+| `/var/lib/astap/` | ASTAP star database (you download it, step 3 above; the solver binary itself ships in `/opt/openastroara`) | `openastroara:openastroara` |
 | `/etc/openastroara/server.env` | Environment overrides (`OPENASTROARA_PORT`, etc.) | `root:openastroara`, 640 |
 | `/var/lib/openastroara/` | Profile + SQLite catalog (`profile.json`, `openastroara.db`) | `openastroara:openastroara` |
 | `/var/log/openastroara/` | Rotated log files (Serilog file sink) | `openastroara:openastroara` |
@@ -191,6 +191,12 @@ sudo apt install libcfitsio10
 # from x86-64: `sudo apt install gcc-aarch64-linux-gnu` and prefix with `CC=aarch64-linux-gnu-gcc`).
 scripts/build-astrometry-natives.sh ./publish/arm64
 ls publish/arm64/liberfa.so publish/arm64/libsupernovas.so   # both must exist
+# The bundled ASTAP solver is not produced by `dotnet publish` either: the profile's default solver
+# path is /opt/openastroara/astap_cli, so build it into the same directory (`sudo apt install fpc`;
+# the submodule needs `git submodule update --init third_party/astap`; fpc has no cross units, so run
+# this on the Pi or in an arm64 container).
+scripts/build-astap-cli.sh ./publish/arm64
+ls publish/arm64/astap_cli   # must exist
 sudo cp -r publish/arm64/* /opt/openastroara/
 sudo chown -R openastroara:openastroara /opt/openastroara
 

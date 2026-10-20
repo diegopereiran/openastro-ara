@@ -46,7 +46,7 @@ namespace OpenAstroAra.Test {
             var dir = Path.Combine(Path.GetTempPath(), "ara-ps-put-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             try {
-                // /usr/bin/astap is absent and /usr/bin/astap_cli present: the normalizer rewrites the path on write.
+                // Only the bundled /opt/openastroara/astap_cli is present: the normalizer rewrites a stock path on write.
                 var store = new FileProfileStore(dir, fileExists: p => p == SolverPathMigration.AstapCliPath);
 
                 var result = ProfileEndpoints.PutPlateSolveSettings(Settings(SolverPathMigration.LegacyAstapPath), store);
@@ -67,7 +67,7 @@ namespace OpenAstroAra.Test {
             Assert.That(SolverPathMigration.BootWarning(Settings("https://nova.astrometry.net/api"), Nothing),
                 Does.Contain("configured as a URL").And.Contain("astap_cli").And.Not.Contain("not found at"));
             Assert.That(SolverPathMigration.BootWarning(Settings("/usr/bin/astap_cli"), Nothing),
-                Does.Contain("not found at /usr/bin/astap_cli").And.Contain("apt install astap-cli"));
+                Does.Contain("not found at /usr/bin/astap_cli").And.Contain("Reinstall openastroara-server"));
             Assert.That(SolverPathMigration.BootWarning(Settings("/usr/bin/astap_cli"), static _ => true), Is.Null);
             Assert.That(SolverPathMigration.BootWarning(Settings(""), Nothing), Is.Null, "nothing configured: the normalizer's default applies, nothing to warn about");
             Assert.That(SolverPathMigration.IsEndpointUrl("http://localhost:8080"), Is.True);

@@ -79,8 +79,8 @@ public static class ProfileSnapshotNormalizer {
             Filenames = (FilenamesSettingsDto?)snap.Filenames ?? defaults.Filenames,
             SafetyPolicies = (SafetyPoliciesDto?)snap.SafetyPolicies ?? defaults.SafetyPolicies,
             Autofocus = (AutofocusSettingsDto?)snap.Autofocus ?? defaults.Autofocus,
-            // #1121 — a pre-#1094 profile's /usr/bin/astap becomes /usr/bin/astap_cli when that is
-            // the binary actually installed.
+            // #1121/#1136 — a stock solver path (/usr/bin/astap, /usr/bin/astap_cli,
+            // /opt/astap/astap_cli) becomes the bundled /opt/openastroara/astap_cli once it is on disk.
             PlateSolve = SolverPathMigration.Migrate((PlateSolveSettingsDto?)snap.PlateSolve ?? defaults.PlateSolve, fileExists),
             DiagnosticsMode = (DiagnosticsModeDto?)snap.DiagnosticsMode ?? defaults.DiagnosticsMode,
             Phd2 = (Phd2SettingsDto?)snap.Phd2 ?? defaults.Phd2,
@@ -163,7 +163,7 @@ public static class ProfileSnapshotNormalizer {
             AbortSequenceOnAfFailure: true, RestorePositionOnFailure: true,
             TelescopeType: "other", StepSizeAuto: true),
         PlateSolve: new(
-            Engine: "astap", PathOrEndpoint: "/usr/bin/astap_cli", // Debian's astap-cli package (a .deb Depends since #1094)
+            Engine: "astap", PathOrEndpoint: SolverPathMigration.AstapCliPath, // the multi-core solver bundled with the daemon
             IndexDownloadPath: "/var/lib/astap", SearchRadiusDeg: 30.0,
             DownsampleFactor: 0, // 0 = auto from the pixel scale (#1136)
             TimeoutSeconds: 60, UseBlindFallback: true,

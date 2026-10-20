@@ -869,8 +869,10 @@ Both must succeed.
 `Dockerfile` at repo root:
 
 ```dockerfile
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-bookworm-slim-arm64v8
-WORKDIR /app
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled-arm64v8
+# The daemon directory is /opt/openastroara in the image as in the .deb: the profile's default
+# solver path is the absolute /opt/openastroara/astap_cli (scripts/tests/test_astap_cli_bundle_guards.py).
+WORKDIR /opt/openastroara
 COPY publish/arm64/ ./
 EXPOSE 5555
 USER 1000
@@ -1652,7 +1654,7 @@ Placeholders during port. Every icon/splash/logo reference carries `TODO(brandin
 
 ### 18.I — Plate solving
 - **ASTAP**: only solver. Cross-platform; users download per OS from astap.nl. Server config exposes ASTAP binary path + **one or more star-database paths**; per-OS binary defaults attempted on first run:
-  - Linux: `/usr/bin/astap_cli` — Debian's `astap-cli` package, a `.deb` Depends since #1094 (the GUI package's `/usr/bin/astap` also works if installed)
+  - Linux: `/opt/openastroara/astap_cli` — the solver bundled with the daemon: OpenAstro's multi-core fork of `astap_cli` (git submodule `third_party/astap`, branch `main` of open-astro/astap, built by `scripts/build-astap-cli.sh` on every publish). It spreads the FITS load, binning, star detection and the spiral database search over every core: on a 4-core Pi a hinted solve of a 26 MP frame takes 0.7 s against the stock binary's 1.6 s, a blind solve 4 s against 12 s; with one thread its output is bit-identical to upstream. `ASTAP_THREADS` / `-threads n` cap the cores. Profiles that still name a stock binary (`/usr/bin/astap_cli` from Debian's `astap-cli`, the GUI package's `/usr/bin/astap`, the astap.nl `.deb`'s `/opt/astap/astap_cli`) are migrated to the bundled one by `SolverPathMigration`; any other path is the user's and stays
   - macOS: `/Applications/ASTAP.app/Contents/MacOS/astap`
   - Windows: `%PROGRAMFILES%\astap\astap.exe`
 - **Star databases — FOV-aware, multi-database.** The solver engine is the same across the whole field-of-view span (wide nebula → tiny galaxy); what actually determines whether a frame solves is the **star-database depth matched to the rig's pixel scale / FOV**. ASTAP ships several swappable Gaia-based databases, and the config must support **more than one installed at once** rather than a single fixed path:
@@ -1660,7 +1662,7 @@ Placeholders during port. Every icon/splash/logo reference carries `TODO(brandin
   - **General all-purpose** (typical FOVs) → `V50` / `D50` — covers the bulk of sessions.
   - **Narrow field / tiny galaxies** (long focal length, small FOV, few bright stars in frame) → dense deep database (e.g. `H17` / `H18`) — enough faint Gaia stars to get a match where shallow catalogs fail.
   - **Selection:** the server picks the appropriate installed database from the active rig's computed FOV / pixel scale (focal length + sensor + binning) and names it to ASTAP per-solve with `-D <abbrev>` alongside `-d <database_dir>` (only when more than one is installed; see Status). A lone database is used for every solve; a warning when the FOV falls outside its useful range is not built yet. Exact database names/magnitude limits track astap.nl and may evolve — config stores paths, not hard-coded catalog identifiers.
-  - **Status (2026-09-22, #1094):** `ASTAPSolver` now passes `-d <database_dir>` from the profile's plate-solve index path (`ASTAPDatabaseLocation`, bridged from `PlateSolveSettingsDto.IndexDownloadPath`, default `/var/lib/astap`); a configured directory that is missing or empty logs one warning per daemon run and falls back to ASTAP's own lookup. Since #1121, when more than one database sits in that directory the daemon names one with `-D <abbrev>` (`AstapStarDatabase.Select`: fields under 0.25° take the deepest, over 30° the shallowest, otherwise D80 first), a pre-#1094 `/usr/bin/astap` profile value migrates to `/usr/bin/astap_cli` when only the latter is installed, and Settings → Plate solving shows the directory's status (`GET /api/v1/platesolve/database`). Still open: the server-side download flow below — docs/DEPLOY.md documents a manual one-time D80 download until then.
+  - **Status (2026-09-22, #1094):** `ASTAPSolver` now passes `-d <database_dir>` from the profile's plate-solve index path (`ASTAPDatabaseLocation`, bridged from `PlateSolveSettingsDto.IndexDownloadPath`, default `/var/lib/astap`); a configured directory that is missing or empty logs one warning per daemon run and falls back to ASTAP's own lookup. Since #1121, when more than one database sits in that directory the daemon names one with `-D <abbrev>` (`AstapStarDatabase.Select`: fields under 0.25° take the deepest, over 30° the shallowest, otherwise D80 first), a stock solver path (`/usr/bin/astap`, `/usr/bin/astap_cli`, `/opt/astap/astap_cli`) migrates to the bundled `/opt/openastroara/astap_cli` once that binary is on disk (#1136), and Settings → Plate solving shows the directory's status (`GET /api/v1/platesolve/database`). Still open: the server-side download flow below — docs/DEPLOY.md documents a manual one-time D80 download until then.
 - **Where ASTAP + databases live: on the Pi (server side), not the client.** The solver runs on the Pi, so its binary and star databases are a **server-managed, Pi-side asset** — the same storage domain as FITS frames / profiles / calibration (§29, on the **mandatory USB drive**), and explicitly *not* the WILMA/client-side sky-data domain (§36 Aladin HiPS surveys / DE440, which download to the client). Consequences:
   - **Downloads execute server-side.** The wizard (running in WILMA) does not fetch databases to the client and copy them over — it calls a **server endpoint** that downloads the selected database(s) from astap.nl directly onto the Pi's USB storage, where ASTAP reads them. Client only triggers and shows progress (mirrors the §36.2 background-download UX, but the bytes land on the Pi).
   - **"Browse" = the Pi's filesystem.** Any path picker for binary/database location browses the **server's** filesystem via the server API, not WILMA's local disk.
@@ -4161,7 +4163,7 @@ sudo apt install openastroara-server
 
 - Name: `openastroara-server` (lowercase, hyphens per Debian convention)
 - Arch: **arm64** (RPi 4/5, Orange Pi 5, RockChip SBCs — any ARM64 Debian-family **Trixie or newer**; Bookworm's glibc 2.36 fails the `libc6` floor, #1130)
-- Depends: `libc6 (>= 2.38)`, `libgcc-s1`, `libstdc++6`, `libcfitsio10`, `exfatprogs`, `polkitd`, `astap-cli`, `curl` (the §33 update helper's `/healthz` probe) (authoritative list: `packaging/debian/DEBIAN/control.template`)
+- Depends: `libc6 (>= 2.38)`, `libgcc-s1`, `libstdc++6`, `libcfitsio10`, `exfatprogs`, `polkitd`, `curl` (the §33 update helper's `/healthz` probe); the ASTAP solver is bundled (§18.I), not a Depends (authoritative list: `packaging/debian/DEBIAN/control.template`)
 - Recommends: `alpacabridge`, `openastro-guider` (pulled in by default; opt-out with `--no-install-recommends`)
 - Suggests: `gpsd` (power-user clock discipline with no client attached, §31.4.1 — Ara itself never reads a receiver on the Pi)
 
@@ -12043,7 +12045,7 @@ ARA Core reads and writes FITS files via P/Invoke into **CFITSIO** ([heasarc.gsf
 **Pi (.deb path):** add `libcfitsio10` to `Depends` in §34.2:
 
 ```
-Depends: libc6 (>= 2.38), libgcc-s1, libstdc++6, libcfitsio10, exfatprogs, polkitd, astap-cli, curl
+Depends: libc6 (>= 2.38), libgcc-s1, libstdc++6, libcfitsio10, exfatprogs, polkitd, curl
 ```
 
 `libcfitsio10` ships in Debian Trixie's repos — `apt install` pulls it transparently. No build step required on the Pi.
