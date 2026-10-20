@@ -110,6 +110,8 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
     }
     private CameraStateDto _runtime = IdleRuntime;
     private int _refreshing;
+    // #1185 — heat-sink read cadence + NotImplemented latch for the connected driver.
+    private readonly HeatSinkProbe _heatSink = new();
     private int _refreshPending;
     private long _connectGeneration;
     private int _captureInFlight;
@@ -285,6 +287,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             }
             DisposeClientLocked();
             _device = device;
+            _heatSink.Reset(); // a new driver may implement HeatSinkTemperature (#1185)
             generation = ++_connectGeneration;
             SetState(EquipmentConnectionState.Connecting);
         }
@@ -1797,7 +1800,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
                 return; // the device didn't answer — skip this pass's reads
             }
             ObserveProbeIfLive(client, probeSucceeded: true);
-            var runtime = ReadRuntime(client, out var readError);
+            var runtime = ReadRuntime(client, _heatSink, out var readError);
             var caps = needCaps ? ReadCapabilities(client) : null;
             var capsCommitted = false;
             var driftVerdict = CoolingDriftVerdict.Idle;
@@ -1959,7 +1962,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "Per-field read boundary: an unsupported/transiently-failing camera property falls back to its default rather than failing the whole runtime read. CA1031's log-and-recover boundary applies.")]
-    private static CameraStateDto ReadRuntime(AlpacaCamera c, out string? readError) {
+    private static CameraStateDto ReadRuntime(AlpacaCamera c, HeatSinkProbe heatSinkProbe, out string? readError) {
         CameraState state;
         readError = null;
         // CameraState is the essential read: a streak of failures is a degraded fault (§42.3 second channel).
@@ -1987,8 +1990,27 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
                 readoutMode = modes[idx]?.ToString();
             }
         } catch (Exception) { }
+        // #1185 — the cooler's hot side: only while the cooler is on, every Nth pass, never again for a
+        // driver that answered NotImplemented (HeatSinkProbe has the rule and the test).
+        var heatSink = heatSinkProbe.Read(coolerOn, () => c.HeatSinkTemperature);
         return new CameraStateDto(MapState(state), temp, coolerPower, coolerOn, progress,
-            CoolerSetpointC: setpoint, ReadoutMode: readoutMode, CoolerStateKnown: coolerStateKnown);
+            CoolerSetpointC: setpoint, ReadoutMode: readoutMode, CoolerStateKnown: coolerStateKnown,
+            HeatSinkTemperatureC: heatSink);
+    }
+
+    /// <summary>#1185 — the wire rule for ASCOM's discrete Gains / Offsets name lists: a null or empty
+    /// list means "the camera uses the Min..Max range" and goes out as null; a non-empty one goes out
+    /// as the names in driver index order (a null entry as ""). Extracted so the rule is testable
+    /// without a fake Alpaca camera.</summary>
+    internal static IReadOnlyList<string>? NamesOrNull<T>(IList<T>? list) {
+        if (list is not { Count: > 0 }) {
+            return null;
+        }
+        var names = new List<string>(list.Count);
+        foreach (var item in list) {
+            names.Add(item?.ToString() ?? "");
+        }
+        return names;
     }
 
     // Extracted (internal) for direct unit testing.
@@ -2061,6 +2083,18 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
         } catch (Exception) { }
         double pixelSizeY = 0;
         try { pixelSizeY = c.PixelSizeY; } catch (Exception) { }
+        // #1185 — §25.5.5 DTO gaps the device layer can answer: the sensor-type name, a mechanical
+        // shutter, and a discrete gain list (empty from the driver → null, "use the range").
+        string? sensorType = null;
+        try { sensorType = c.SensorType.ToString(); } catch (Exception) { }
+        bool hasShutter = false;
+        try { hasShutter = c.HasShutter; } catch (Exception) { }
+        IReadOnlyList<string>? gains = null;
+        try { gains = NamesOrNull(c.Gains); } catch (Exception) { }
+        IReadOnlyList<string>? offsets = null;
+        try { offsets = NamesOrNull(c.Offsets); } catch (Exception) { }
+        double exposureResolution = 0;
+        try { exposureResolution = c.ExposureResolution; } catch (Exception) { }
         return new CameraCapabilitiesDto(
             SensorWidth: w, SensorHeight: h, PixelSizeUm: pixelSize,
             CanSetTemperature: canSetTemp, CanAbortExposure: canAbort, CanGetCoolerPower: canCoolerPower,
@@ -2075,7 +2109,12 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             CurrentGain: currentGain,
             HasCooler: hasCooler,
             ReadoutModes: readoutModes,
-            PixelSizeUmY: pixelSizeY);
+            PixelSizeUmY: pixelSizeY,
+            SensorType: sensorType,
+            HasShutter: hasShutter,
+            Gains: gains,
+            Offsets: offsets,
+            ExposureResolutionSec: exposureResolution);
     }
 
     // RGGB native + ASCOM BayerOffsetX/Y → the effective 2×2 pattern at the image (0,0) origin,
