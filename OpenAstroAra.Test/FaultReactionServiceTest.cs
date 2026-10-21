@@ -19,6 +19,7 @@ using OpenAstroAra.Server.Contracts.WsEvents;
 using OpenAstroAra.Server.Services;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -233,6 +234,90 @@ namespace OpenAstroAra.Test {
             sequencer.Verify(s => s.ResumeRunsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Once);
             Assert.That(posted.Select(n => n.Severity), Does.Contain(NotificationSeverity.Info),
                 "recovery posts the all-clear");
+        }
+
+        [Test]
+        public async Task A_connect_still_in_flight_past_the_confirm_window_is_waited_out_not_retried() {
+            // AB #1452 — a bridge that searches serial ports answers Connected=true late. The ladder
+            // must keep waiting while the service reports Connecting, not walk the next rung.
+            service.ConnectInFlightTimeout = TimeSpan.FromSeconds(10);
+            reconnector.Setup(r => r.ReconnectAsync(DeviceType.Camera, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ReconnectOutcome(1, 1));
+            var connecting = new Stopwatch();
+            reconnector.Setup(r => r.GetConnectionStateAsync(DeviceType.Camera, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => {
+                    lock (connecting) {
+                        if (!connecting.IsRunning) {
+                            connecting.Start();
+                        }
+                        // three confirm windows (200 ms) of Connecting before the connect lands
+                        return connecting.Elapsed < TimeSpan.FromMilliseconds(600)
+                            ? EquipmentConnectionState.Connecting
+                            : EquipmentConnectionState.Connected;
+                    }
+                });
+
+            service.OnFault(Fault());
+            await service.WhenIdleAsync();
+
+            Assert.That(Actions(), Is.EqualTo(ReconnectRecover));
+            Assert.That(ActionPayload("recovered").GetProperty("attempts").GetInt32(), Is.EqualTo(1),
+                "the first attempt's connect landed; no rung was spent waiting on it");
+            reconnector.Verify(r => r.ReconnectAsync(DeviceType.Camera, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task A_slow_mount_connect_gets_a_fresh_confirm_window_for_its_clean_read() {
+            // #1246 + AB #1452 — an iOptron on `network` answers Connected after the confirm window,
+            // then needs one clean refresh tick. That wait is timed from when the connect landed,
+            // not from the dispatch, or a connect that worked counts as a failed rung.
+            service.ConnectInFlightTimeout = TimeSpan.FromSeconds(10);
+            reconnector.Setup(r => r.ReconnectAsync(DeviceType.Telescope, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ReconnectOutcome(1, 1));
+            var sinceDispatch = new Stopwatch();
+            TimeSpan Elapsed() {
+                lock (sinceDispatch) {
+                    if (!sinceDispatch.IsRunning) {
+                        sinceDispatch.Start();
+                    }
+                    return sinceDispatch.Elapsed;
+                }
+            }
+            // Connecting past the 200 ms confirm window, then Connected; the clean read lands 100 ms later.
+            reconnector.Setup(r => r.GetConnectionStateAsync(DeviceType.Telescope, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => Elapsed() < TimeSpan.FromMilliseconds(300)
+                    ? EquipmentConnectionState.Connecting
+                    : EquipmentConnectionState.Connected);
+            telescope.Setup(t => t.HasCleanReadSinceConnect).Returns(() => Elapsed() >= TimeSpan.FromMilliseconds(400));
+
+            service.OnFault(Fault(DeviceType.Telescope));
+            await service.WhenIdleAsync();
+
+            Assert.That(ActionPayload("recovered").GetProperty("attempts").GetInt32(), Is.EqualTo(1));
+            reconnector.Verify(r => r.ReconnectAsync(DeviceType.Telescope, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
+        public async Task A_connect_stuck_in_Connecting_gives_up_at_the_in_flight_window() {
+            // In-flight window well past the fixture's 200 ms confirm window, so a rung that stopped
+            // at the confirm window shows up as a short gap between dispatches.
+            service.ConnectInFlightTimeout = TimeSpan.FromMilliseconds(500);
+            var clock = Stopwatch.StartNew();
+            var dispatches = new List<TimeSpan>();
+            reconnector.Setup(r => r.ReconnectAsync(DeviceType.Camera, It.IsAny<CancellationToken>()))
+                .Callback(() => { lock (dispatches) { dispatches.Add(clock.Elapsed); } })
+                .ReturnsAsync(new ReconnectOutcome(1, 1));
+            reconnector.Setup(r => r.GetConnectionStateAsync(DeviceType.Camera, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(EquipmentConnectionState.Connecting);
+
+            service.OnFault(Fault());
+            await service.WhenIdleAsync();
+
+            Assert.That(Actions(), Does.Not.Contain("recovered"), "a connect that never lands is not a recovery");
+            Assert.That(dispatches, Has.Count.GreaterThan(1), "the ladder walks its rungs");
+            var gaps = dispatches.Zip(dispatches.Skip(1), (a, b) => b - a).ToList();
+            Assert.That(gaps, Has.All.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(500)),
+                "each rung waited out the in-flight window, not the 200 ms confirm window");
         }
 
         [Test]
