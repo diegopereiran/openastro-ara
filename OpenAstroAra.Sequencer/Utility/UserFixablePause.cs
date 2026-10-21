@@ -34,6 +34,7 @@ namespace OpenAstroAra.Sequencer.Utility {
         /// <summary>What the user is asked to do, after the failure's own message.</summary>
         public static string Prompt(Exception ex) => ex switch {
             StoreUnavailableException => $"{ex.Message} Plug the drive back in, then press Resume",
+            CameraUnavailableException camera => $"{camera.Cause} Check its USB cable and power, reconnect it if it doesn't come back by itself, then press Resume",
             _ => $"{ex.Message} Check its USB cable and power, reconnect it if it doesn't come back by itself, then press Resume",
         };
 
@@ -56,7 +57,7 @@ namespace OpenAstroAra.Sequencer.Utility {
 
         /// <summary>Pause the run awaiting the user and wait for Resume.</summary>
         private static async Task WaitAsync(PauseGate gate, string step, Exception ex, IProgress<ApplicationStatus>? progress, CancellationToken token) {
-            Logger.Warning($"{step}: {ex.Message} — pausing the run awaiting the user");
+            Logger.Warning($"{step}: {(ex is CameraUnavailableException camera ? camera.Cause : ex.Message)} — pausing the run awaiting the user");
             progress?.Report(new ApplicationStatus() { Status = Prompt(ex) });
             gate.RequestPause(PauseKind.AwaitingUser);
             await gate.WaitWhilePausedAsync(token);
