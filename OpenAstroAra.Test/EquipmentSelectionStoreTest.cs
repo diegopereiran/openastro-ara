@@ -39,7 +39,9 @@ namespace OpenAstroAra.Test {
         public void SetUp() {
             _dir = Path.Combine(Path.GetTempPath(), "ara-eqsel-" + Path.GetRandomFileName());
             Directory.CreateDirectory(_dir);
-            _store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance);
+            // The shared store treats nothing as this machine: the fixture's devices sit on loopback with
+            // invented host names, and the localhost rule (its own tests below) would fold them together.
+            _store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance, isThisMachine: _ => false);
         }
 
         [TearDown]
@@ -53,6 +55,79 @@ namespace OpenAstroAra.Test {
         private static DiscoveredDeviceDto Device(DeviceType type, string id, string name, int number = 0, string host = "host") =>
             new(UniqueId: id, Name: name, Type: type, HostName: host, IpAddress: "127.0.0.1",
                 IpPort: 11111, AlpacaDeviceNumber: number, UseHttps: false);
+
+        private static bool LocalBox(string? host) => host is "192.168.8.118" or "172.24.1.1" or "localhost" or "127.0.0.1";
+
+        [Test]
+        public async Task A_device_on_this_machines_address_is_remembered_as_localhost() {
+            // 2026-10-16: the CM4 remembered its devices under three of its own addresses, one per
+            // network it had been on; a boot on another network left half the rig "offline".
+            using var store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance, LocalBox);
+            await store.RememberAsync(new DiscoveredDeviceDto("cam", "ASI2600MM", DeviceType.Camera, "192.168.8.118", "192.168.8.118", 6800, 1, false), CancellationToken.None);
+            await store.RememberAsync(new DiscoveredDeviceDto("mount", "HAE29C", DeviceType.Telescope, "openastro.lan", "172.24.1.1", 6800, 0, false), CancellationToken.None);
+            await store.RememberAsync(new DiscoveredDeviceDto("remote", "Other box", DeviceType.Focuser, "rc91.lan", "192.168.1.235", 6800, 0, false), CancellationToken.None);
+
+            var all = await store.GetAllAsync(CancellationToken.None);
+            var cam = all.Single(d => d.UniqueId == "cam");
+            Assert.That((cam.HostName, cam.IpAddress), Is.EqualTo(("localhost", "127.0.0.1")));
+            var mount = all.Single(d => d.UniqueId == "mount");
+            Assert.That((mount.HostName, mount.IpAddress), Is.EqualTo(("localhost", "127.0.0.1")));
+            var remote = all.Single(d => d.UniqueId == "remote");
+            Assert.That((remote.HostName, remote.IpAddress), Is.EqualTo(("rc91.lan", "192.168.1.235")), "another machine's device keeps its address");
+        }
+
+        [Test]
+        public async Task A_switch_under_an_old_own_address_leaves_no_key_behind_on_the_next_write() {
+            // The same switch under the field router's address and under localhost: the next write must
+            // not carry the old-address key forward (a raw-map reader would dial the switch twice).
+            await File.WriteAllTextAsync(Path.Combine(_dir, EquipmentSelectionStore.FileName), """
+                {
+                  "Switch:192.168.8.118:6800:2": { "UniqueId": "ZWO_ASIAIR_2", "Name": "ASIAIR", "Type": "Switch", "HostName": "192.168.8.118", "IpAddress": "192.168.8.118", "IpPort": 6800, "AlpacaDeviceNumber": 2, "UseHttps": false },
+                  "Switch:LOCALHOST:6800:2": { "UniqueId": "ZWO_ASIAIR_2", "Name": "ASIAIR", "Type": "Switch", "HostName": "localhost", "IpAddress": "127.0.0.1", "IpPort": 6800, "AlpacaDeviceNumber": 2, "UseHttps": false }
+                }
+                """);
+            using var store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance, LocalBox);
+
+            await store.RememberAsync(new DiscoveredDeviceDto("cam", "ASI2600MM", DeviceType.Camera, "localhost", "127.0.0.1", 6800, 1, false), CancellationToken.None);
+
+            var text = await File.ReadAllTextAsync(Path.Combine(_dir, EquipmentSelectionStore.FileName));
+            Assert.That(text, Does.Not.Contain("192.168.8.118"));
+            Assert.That((await store.GetAllAsync(CancellationToken.None)).Count(d => d.Type == DeviceType.Switch), Is.EqualTo(1));
+        }
+
+        [Test]
+        public async Task Relocate_drops_only_the_old_address_entry() {
+            // Two switches share the serial-less id "ZWO_ASIAIR_2": one saved under this box's old field
+            // address, one on another bridge that is still there. Healing the first must keep the second.
+            using var store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance, _ => false);
+            var old = new DiscoveredDeviceDto("ZWO_ASIAIR_2", "ASIAIR", DeviceType.Switch, "192.168.8.118", "192.168.8.118", 6800, 2, false);
+            var remote = new DiscoveredDeviceDto("ZWO_ASIAIR_2", "ASIAIR", DeviceType.Switch, "192.168.1.50", "192.168.1.50", 6800, 2, false);
+            await store.RememberAsync(old, CancellationToken.None);
+            await store.RememberAsync(remote, CancellationToken.None);
+
+            await store.RelocateAsync(old, old with { HostName = "localhost", IpAddress = "127.0.0.1" }, CancellationToken.None);
+
+            var switches = (await store.GetAllAsync(CancellationToken.None)).Where(d => d.Type == DeviceType.Switch).Select(d => d.IpAddress).ToList();
+            Assert.That(switches, Has.Count.EqualTo(2).And.Contains("127.0.0.1").And.Contains("192.168.1.50"));
+        }
+
+        [Test]
+        public async Task A_file_from_before_the_localhost_rule_migrates_on_read() {
+            // The on-disk map the night's box had: every device under an address of its own.
+            await File.WriteAllTextAsync(Path.Combine(_dir, EquipmentSelectionStore.FileName), """
+                {
+                  "Camera": { "UniqueId": "cam", "Name": "ASI2600MM", "Type": "Camera", "HostName": "192.168.8.118", "IpAddress": "192.168.8.118", "IpPort": 6800, "AlpacaDeviceNumber": 1, "UseHttps": false },
+                  "Telescope": { "UniqueId": "mount", "Name": "HAE29C", "Type": "Telescope", "HostName": "172.24.1.1", "IpAddress": "172.24.1.1", "IpPort": 6800, "AlpacaDeviceNumber": 0, "UseHttps": false }
+                }
+                """);
+            using var store = new EquipmentSelectionStore(_dir, NullLogger<EquipmentSelectionStore>.Instance, LocalBox);
+
+            var all = await store.GetAllAsync(CancellationToken.None);
+
+            Assert.That(all, Has.Count.EqualTo(2));
+            Assert.That(all.Select(d => d.HostName), Is.All.EqualTo("localhost"));
+            Assert.That(all.Select(d => d.IpAddress), Is.All.EqualTo("127.0.0.1"));
+        }
 
         [Test]
         public async Task GetAll_is_empty_when_nothing_remembered() {

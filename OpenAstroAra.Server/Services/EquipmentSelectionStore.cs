@@ -50,6 +50,12 @@ public interface IEquipmentSelectionStore {
     /// stuck switch also stops auto-connect-on-boot resurrecting it. Idempotent; returns the
     /// number of entries removed.</summary>
     Task<int> ForgetSwitchAsync(string uniqueId, CancellationToken ct);
+
+    /// <summary>Replace the entry remembered at <paramref name="from"/>'s endpoint with <paramref name="moved"/>
+    /// in one write: a device found at a new address (its own bridge, as localhost) drops only the old
+    /// address's entry, never another server's device that shares its UniqueId. Best-effort like
+    /// <see cref="RememberAsync"/>.</summary>
+    Task RelocateAsync(DiscoveredDeviceDto from, DiscoveredDeviceDto moved, CancellationToken ct);
 }
 
 /// <summary>
@@ -72,14 +78,22 @@ public sealed partial class EquipmentSelectionStore : IEquipmentSelectionStore, 
     private readonly ILogger<EquipmentSelectionStore> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public EquipmentSelectionStore(string profileDir, ILogger<EquipmentSelectionStore> logger) {
+    // "Is this address this machine?" — injectable so the store's localhost rule is testable on any box.
+    // Null: the real machine, its name and addresses read once per store operation.
+    private readonly Func<string?, bool>? _isThisMachine;
+
+    public EquipmentSelectionStore(string profileDir, ILogger<EquipmentSelectionStore> logger, Func<string?, bool>? isThisMachine = null) {
         ArgumentException.ThrowIfNullOrEmpty(profileDir);
         _path = Path.Combine(profileDir, FileName);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _isThisMachine = isThisMachine;
     }
 
     public async Task RememberAsync(DiscoveredDeviceDto device, CancellationToken ct) {
         ArgumentNullException.ThrowIfNull(device);
+        // A device on this machine's own Alpaca server is remembered as localhost: the one address
+        // that survives a move between the hotspot, the field router and the home LAN.
+        device = HostLocality.LocalizeDevice(device, _isThisMachine ?? HostLocality.ThisMachineSnapshot());
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         // Atomic replace: write a temp sibling then move over the target so a
         // crash mid-write can never leave a half-written selection file.
@@ -105,6 +119,40 @@ public sealed partial class EquipmentSelectionStore : IEquipmentSelectionStore, 
         catch (Exception ex) {
             SafeDeleteTmp(tmp); // don't leave an orphaned .tmp if the write/move failed mid-way
             LogWriteFailed(ex, device.Type);
+        }
+#pragma warning restore CA1031
+        finally {
+            _gate.Release();
+        }
+    }
+
+    public async Task RelocateAsync(DiscoveredDeviceDto from, DiscoveredDeviceDto moved, CancellationToken ct) {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(moved);
+        var to = HostLocality.LocalizeDevice(moved, _isThisMachine ?? HostLocality.ThisMachineSnapshot());
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        var tmp = _path + ".tmp";
+        try {
+            var map = await ReadLocked(ct).ConfigureAwait(false);
+            var oldEndpoint = DiscoveredDeviceEndpoint.KeyOf(from);
+            foreach (var key in map.Where(kv => Canonical(kv.Value.Type) == Canonical(from.Type)
+                                             && DiscoveredDeviceEndpoint.KeyOf(kv.Value) == oldEndpoint)
+                                   .Select(kv => kv.Key).ToList()) {
+                map.Remove(key);
+            }
+            map[KeyFor(to)] = to;
+            var json = JsonSerializer.Serialize(map, JsonOptions);
+            await File.WriteAllTextAsync(tmp, json, Encoding.UTF8, ct).ConfigureAwait(false);
+            File.Move(tmp, _path, overwrite: true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            SafeDeleteTmp(tmp);
+            throw;
+        }
+#pragma warning disable CA1031 // best-effort persistence must not fail the connect that triggered it
+        catch (Exception ex) {
+            SafeDeleteTmp(tmp);
+            LogWriteFailed(ex, to.Type);
         }
 #pragma warning restore CA1031
         finally {
@@ -244,8 +292,22 @@ public sealed partial class EquipmentSelectionStore : IEquipmentSelectionStore, 
     private async Task<Dictionary<string, DiscoveredDeviceDto>> ReadLocked(CancellationToken ct) {
         try {
             var text = await File.ReadAllTextAsync(_path, ct).ConfigureAwait(false);
-            return JsonSerializer.Deserialize<Dictionary<string, DiscoveredDeviceDto>>(text, JsonOptions)
+            var map = JsonSerializer.Deserialize<Dictionary<string, DiscoveredDeviceDto>>(text, JsonOptions)
                 ?? new Dictionary<string, DiscoveredDeviceDto>();
+            // A file written before the localhost rule (or on another network) migrates on read: every
+            // entry naming one of this machine's addresses is dialled as localhost from now on.
+            // A switch is keyed by its endpoint, so a localized entry moves to its localhost key; one already
+            // there wins, and the old-address key is dropped so no writer can carry the same switch twice.
+            var isThisMachine = _isThisMachine ?? HostLocality.ThisMachineSnapshot();
+            foreach (var key in map.Keys.ToList()) {
+                var local = HostLocality.LocalizeDevice(map[key], isThisMachine);
+                if (ReferenceEquals(local, map[key])) {
+                    continue;
+                }
+                map.Remove(key);
+                map.TryAdd(KeyFor(local), local);
+            }
+            return map;
         } catch (FileNotFoundException) {
             return new Dictionary<string, DiscoveredDeviceDto>();
         } catch (DirectoryNotFoundException) {
