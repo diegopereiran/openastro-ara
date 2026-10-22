@@ -1307,6 +1307,11 @@ public sealed partial class TelescopeService : ITelescopeService, IRetainedDevic
             bool stillConnected;
             lock (_gate) {
                 stillConnected = _state == EquipmentConnectionState.Connected;
+                if (stillConnected) {
+                    // The Connected push went out before this seed read; tell clients the
+                    // details are cached so they re-read now.
+                    _events?.DetailsReady(DeviceType.Telescope, _device?.UniqueId, _device?.Name);
+                }
             }
             if (stillConnected) {
                 LogConnected(device.Name, host, device.IpPort, device.AlpacaDeviceNumber);

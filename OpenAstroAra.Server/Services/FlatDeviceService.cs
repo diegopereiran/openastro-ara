@@ -414,6 +414,11 @@ public sealed partial class FlatDeviceService : IFlatDeviceService, IRetainedDev
             bool stillConnected;
             lock (_gate) {
                 stillConnected = _state == EquipmentConnectionState.Connected;
+                if (stillConnected) {
+                    // The Connected push went out before this seed read; tell clients the
+                    // details are cached so they re-read now.
+                    _events?.DetailsReady(DeviceType.FlatDevice, _device?.UniqueId, _device?.Name);
+                }
             }
             if (stillConnected) {
                 LogConnected(device.Name, host, device.IpPort, device.AlpacaDeviceNumber);

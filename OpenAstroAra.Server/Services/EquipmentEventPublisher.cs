@@ -32,6 +32,9 @@ namespace OpenAstroAra.Server.Services;
 /// transition plus the notable-moment alias (<c>equipment.connected</c> /
 /// <c>equipment.disconnected</c> / <c>equipment.connection_failed</c>) the
 /// client can subscribe to without decoding the state machine.
+/// <see cref="Removed"/> and <see cref="DetailsReady"/> also publish
+/// <c>equipment.state_changed</c> without a transition (no alias), so a client
+/// re-reads the device.
 ///
 /// <para>Payload shape (§60.6 lowercase enum tokens, matching the REST wire):
 /// <c>{ "device_type": "telescope", "device_id": ..., "device_name": ...,
@@ -121,6 +124,31 @@ public sealed partial class EquipmentEventPublisher {
             // would otherwise read unresolved forever. Fire-and-forget like the
             // event publishes: the log must never slow a connect path.
             _ = ResolveQuietlyAsync(deviceType);
+        }
+    }
+
+    /// <summary>A connected device's seed read (caps, readings, ports) has run — best-effort: a
+    /// failed read caches nothing and the client's re-read just shows what is there. Services set
+    /// Connected — and publish it — before their seed read, so a client that re-read on that push
+    /// saw no details; this repeats <c>equipment.state_changed</c> (<c>state: "connected"</c>,
+    /// <c>details_ready: true</c>) so it re-reads now instead of on its next poll. No alias and no
+    /// <see cref="Transition"/>: the connection did not change, so in-process listeners and the
+    /// <c>equipment.connected</c> subscribers must not see a second connect.</summary>
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "Event publication is best-effort UX freshness: serialization or channel faults must be logged and dropped, never propagated into a device connect path. CA1031's log-and-recover boundary applies.")]
+    public void DetailsReady(DeviceType deviceType, string? deviceId, string? deviceName) {
+        try {
+            var payload = new JsonObject {
+                ["device_type"] = deviceType.ToString().ToLowerInvariant(),
+                ["device_id"] = deviceId,
+                ["device_name"] = deviceName,
+                ["state"] = EquipmentConnectionState.Connected.ToString().ToLowerInvariant(),
+                ["details_ready"] = true,
+            };
+            using var doc = JsonDocument.Parse(payload.ToJsonString());
+            Publish(WsEventCatalog.EquipmentStateChanged, doc.RootElement.Clone());
+        } catch (Exception ex) {
+            LogPublishFailed(ex, WsEventCatalog.EquipmentStateChanged);
         }
     }
 

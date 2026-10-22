@@ -23,11 +23,23 @@ class _FakeMountApi implements EquipmentDeviceClient<MountStatus> {
   /// initial read in flight while a WS-push refresh overtakes it.
   Completer<void>? gateFirstRead;
 
+  /// When set, the SECOND read (an action's post-202 re-read) blocks on this.
+  Completer<void>? gateSecondRead;
+
+  /// When set, the THIRD read blocks on this.
+  Completer<void>? gateThirdRead;
+
   @override
   Future<MountStatus?> getStatus() async {
     final call = ++statusReads;
     if (call == 1 && gateFirstRead != null) {
       await gateFirstRead!.future;
+    }
+    if (call == 2 && gateSecondRead != null) {
+      await gateSecondRead!.future;
+    }
+    if (call == 3 && gateThirdRead != null) {
+      await gateThirdRead!.future;
     }
     return MountStatus(
       deviceId: 'mnt-1',
@@ -157,6 +169,72 @@ void main() {
         'read-2',
         reason: 'the pre-transition build read would silently revert the panel',
       );
+    });
+
+    test('a push during an action\'s re-read is replayed once it ends', () async {
+      // The daemon pushes Connected before it has read the device's details,
+      // then pushes again once they are cached. The second push can land while
+      // the connect's own re-read is in flight — dropping it left the card on
+      // detail-less status until the 15 s liveness poll.
+      await prime();
+      api.gateSecondRead = Completer<void>();
+      final action = container.read(mountProvider.notifier).reconnect();
+      await pumpEventQueue();
+      expect(api.statusReads, 2, reason: 'the post-202 re-read is held');
+
+      events.add(_stateChanged('telescope'));
+      await pumpEventQueue();
+      expect(api.statusReads, 2, reason: 'no overlapping read');
+
+      api.gateSecondRead!.complete();
+      await action;
+      await pumpEventQueue();
+      expect(api.statusReads, 3, reason: 'the held push re-reads at once');
+    });
+
+    test('a push during a push-driven read is replayed once it ends', () async {
+      // The first Connected push starts a refresh; the details-ready push can
+      // land while that read is still in flight and must not be dropped.
+      await prime();
+      api.gateSecondRead = Completer<void>();
+      events.add(_stateChanged('telescope'));
+      await pumpEventQueue();
+      expect(api.statusReads, 2, reason: 'the first push read is held');
+
+      events.add(_stateChanged('telescope'));
+      await pumpEventQueue();
+      expect(api.statusReads, 2, reason: 'no overlapping read');
+
+      api.gateSecondRead!.complete();
+      await pumpEventQueue();
+      expect(api.statusReads, 3, reason: 'the held push re-reads at once');
+    });
+
+    test('a push held across a manual read and an action survives both', () async {
+      // A poll read is in flight when the user connects; the details-ready
+      // push lands while both reads are. The poll read ending first must not
+      // spend the held push on a refresh() that the action's guard drops.
+      await prime();
+      api.gateSecondRead = Completer<void>();
+      api.gateThirdRead = Completer<void>();
+      final notifier = container.read(mountProvider.notifier);
+      final manual = notifier.refresh();
+      await pumpEventQueue();
+      final action = notifier.reconnect();
+      await pumpEventQueue();
+      expect(api.statusReads, 3, reason: 'manual read and action re-read held');
+
+      events.add(_stateChanged('telescope'));
+      await pumpEventQueue();
+      api.gateSecondRead!.complete();
+      await manual;
+      await pumpEventQueue();
+      expect(api.statusReads, 3, reason: 'still held while the action reads');
+
+      api.gateThirdRead!.complete();
+      await action;
+      await pumpEventQueue();
+      expect(api.statusReads, 4, reason: 'replayed once the action ends');
     });
 
     test(

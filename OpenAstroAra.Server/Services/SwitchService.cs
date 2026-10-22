@@ -691,6 +691,11 @@ public sealed partial class SwitchService : ISwitchService, ICoolingFanActuator,
                 stillConnected = conn.State == EquipmentConnectionState.Connected
                     && _connections.TryGetValue(conn.Key, out var current)
                     && ReferenceEquals(current, conn);
+                if (stillConnected) {
+                    // The Connected push went out before this seed read; tell clients the
+                    // details are cached so they re-read now.
+                    _events?.DetailsReady(DeviceType.Switch, conn.Device.UniqueId, conn.Device.Name);
+                }
             }
             if (stillConnected) {
                 LogConnected(device.Name, host, device.IpPort, device.AlpacaDeviceNumber);
