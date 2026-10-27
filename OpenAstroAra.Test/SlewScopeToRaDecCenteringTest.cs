@@ -155,6 +155,26 @@ namespace OpenAstroAra.Test {
         }
 
         [Test]
+        public async Task The_daemon_factory_wires_the_slew_to_the_centring_executor() {
+            // Daemon runs resolve every step from the HeadlessSequencerFactory prototypes; a slew
+            // registered without the profile and executor slews blind again, which is #1446.
+            var centering = Centering(converges: true);
+            var profile = new OpenAstroAra.Server.Services.HeadlessProfileService();
+            profile.ActiveProfile.PlateSolveSettings.SlewToTarget = true;
+            var factory = OpenAstroAra.Server.Services.HeadlessSequencerFactory.WithDefaults(
+                telescopeMediator: Mount().Object,
+                guiderMediator: Guider(wasGuiding: false).Object,
+                profileService: profile,
+                centeringExecutor: centering.Object);
+            var item = factory.GetItem<SlewScopeToRaDec>();
+            item.Coordinates = Helix();
+
+            await item.Execute(NoProgress, CancellationToken.None);
+
+            centering.Verify(e => e.CenterAsync(It.IsAny<Coordinates>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Test]
         public async Task A_clone_keeps_the_centring_wiring() {
             // Run bodies execute clones of the factory prototype, so the clone must carry the deps.
             var centering = Centering(converges: true);
