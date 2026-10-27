@@ -839,4 +839,125 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('8x8'), findsOneWidget); // full fallback range offered
   });
+
+
+  group('Exposure (s) field', () {
+    Finder exposureField() =>
+        find.widgetWithText(TextField, 'Exposure (s)');
+
+    Future<void> submit(WidgetTester tester, String text) async {
+      await tester.enterText(exposureField(), text);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+    }
+
+    String shown(WidgetTester tester) =>
+        tester.widget<TextField>(exposureField()).controller!.text;
+
+    testWidgets('takes a sub-second exposure and shows it as typed',
+        (tester) async {
+      final container = await _pump(tester);
+      await submit(tester, '0.5');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(milliseconds: 500));
+      expect(shown(tester), '0.5');
+    });
+
+    testWidgets('accepts a comma decimal separator', (tester) async {
+      final container = await _pump(tester);
+      await submit(tester, '2,5');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(milliseconds: 2500));
+      expect(shown(tester), '2.5');
+    });
+
+    testWidgets('whole seconds still display without a decimal',
+        (tester) async {
+      final container = await _pump(tester);
+      expect(shown(tester), '5');
+      await submit(tester, '30');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(seconds: 30));
+      expect(shown(tester), '30');
+    });
+
+    testWidgets('zero or junk puts back the exposure in force',
+        (tester) async {
+      final container = await _pump(tester);
+      for (final bad in ['0', '-1', 'abc', 'NaN', 'Infinity']) {
+        await submit(tester, bad);
+        expect(container.read(exposureControllerProvider).exposure,
+            const Duration(seconds: 5),
+            reason: bad);
+        expect(shown(tester), '5', reason: bad);
+      }
+    });
+
+    testWidgets("floors at the camera's ExposureMin", (tester) async {
+      final camera = CameraStatus.fromJson({
+        'state': 'connected',
+        'capabilities': {
+          'sensor_width': 100,
+          'sensor_height': 100,
+          'min_bin_x': 1,
+          'max_bin_x': 2,
+          'min_bin_y': 1,
+          'max_bin_y': 2,
+          'min_exposure_sec': 0.01,
+          'max_exposure_sec': 3600,
+        },
+        'runtime': {'state': 'idle'},
+      });
+      final container = await _pump(tester, cameraStatus: camera);
+      await submit(tester, '0.001');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(milliseconds: 10));
+      expect(shown(tester), '0.01');
+    });
+
+    testWidgets('a positive input under 1 ms floors to 1 ms', (tester) async {
+      final container = await _pump(tester);
+      await submit(tester, '0.0001');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(milliseconds: 1));
+      expect(shown(tester), '0.001');
+    });
+
+    testWidgets("caps at the camera's ExposureMax", (tester) async {
+      final camera = CameraStatus.fromJson({
+        'state': 'connected',
+        'capabilities': {
+          'sensor_width': 100,
+          'sensor_height': 100,
+          'min_bin_x': 1,
+          'max_bin_x': 2,
+          'min_bin_y': 1,
+          'max_bin_y': 2,
+          'min_exposure_sec': 0.01,
+          'max_exposure_sec': 600,
+        },
+        'runtime': {'state': 'idle'},
+      });
+      final container = await _pump(tester, cameraStatus: camera);
+      await submit(tester, '900');
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(seconds: 600));
+      expect(shown(tester), '600');
+    });
+
+    testWidgets('an absurd input with no camera is bounded, not overflowed',
+        (tester) async {
+      final container = await _pump(tester);
+      await submit(tester, '1e300');
+      expect(tester.takeException(), isNull);
+      expect(container.read(exposureControllerProvider).exposure,
+          const Duration(hours: 24));
+    });
+
+    testWidgets('offers a decimal key on mobile keyboards', (tester) async {
+      await _pump(tester);
+      expect(tester.widget<TextField>(exposureField()).keyboardType,
+          const TextInputType.numberWithOptions(decimal: true));
+    });
+  });
 }
