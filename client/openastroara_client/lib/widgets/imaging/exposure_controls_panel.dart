@@ -33,6 +33,10 @@ class ExposureControlsPanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final params = ref.watch(exposureControllerProvider);
     final ctrl = ref.read(exposureControllerProvider.notifier);
+    final exposureCaps = switch (ref.watch(cameraStatusProvider)) {
+      AsyncData(:final value) => value?.capabilities,
+      _ => null,
+    };
 
     // Width, background and border come from the imaging tab's rail (which
     // also owns scrolling) — this is the compact two-column control grid.
@@ -54,6 +58,8 @@ class ExposureControlsPanel extends ConsumerWidget {
             _DurationSecondsField(
               label: 'Exposure (s)',
               value: params.exposure,
+              minSeconds: exposureCaps?.minExposureSec ?? 0,
+              maxSeconds: exposureCaps?.maxExposureSec ?? 0,
               onChanged: ctrl.setExposure,
             ),
             _IntField(
@@ -125,18 +131,39 @@ class ExposureControlsPanel extends ConsumerWidget {
   }
 }
 
+/// Exposure in seconds, fractions allowed (0.5 s for bright targets and
+/// flats). Millisecond resolution — what the daemon request carries — with a
+/// floor at the camera's ExposureMin and a ceiling at its ExposureMax when it
+/// reports them (0 = not reported).
 class _DurationSecondsField extends StatefulWidget {
   final String label;
   final Duration value;
+  final double minSeconds;
+  final double maxSeconds;
   final ValueChanged<Duration> onChanged;
   const _DurationSecondsField({
     required this.label,
     required this.value,
     required this.onChanged,
+    this.minSeconds = 0,
+    this.maxSeconds = 0,
   });
 
   @override
   State<_DurationSecondsField> createState() => _DurationSecondsFieldState();
+}
+
+/// Upper sanity bound when the camera reports no ExposureMax, so an input like
+/// 1e300 cannot overflow Duration.
+const int _kMaxExposureMs = 24 * 3600 * 1000;
+
+/// "5" for whole seconds, "0.5" / "0.001" otherwise (no trailing zeros).
+String _formatSeconds(Duration d) {
+  final ms = d.inMilliseconds;
+  if (ms % 1000 == 0) return (ms ~/ 1000).toString();
+  return (ms / 1000)
+      .toStringAsFixed(3)
+      .replaceFirst(RegExp(r'0+$'), '');
 }
 
 class _DurationSecondsFieldState extends State<_DurationSecondsField> {
@@ -146,7 +173,7 @@ class _DurationSecondsFieldState extends State<_DurationSecondsField> {
   @override
   void initState() {
     super.initState();
-    _ctrl = TextEditingController(text: widget.value.inSeconds.toString());
+    _ctrl = TextEditingController(text: _formatSeconds(widget.value));
     // Commit on focus loss too — "type 1, click Take One" must shoot 1s, not
     // silently revert to the last submitted value (Enter alone was the only
     // commit path, so an un-submitted edit snapped back on the next rebuild).
@@ -156,12 +183,28 @@ class _DurationSecondsFieldState extends State<_DurationSecondsField> {
   }
 
   void _commit(String s) {
-    final parsed = int.tryParse(s.trim());
-    if (parsed != null && parsed >= 0) {
-      widget.onChanged(Duration(seconds: parsed));
-    } else {
-      _ctrl.text = widget.value.inSeconds.toString();
+    // Accept a comma decimal separator too (European keyboards).
+    final parsed = double.tryParse(s.trim().replaceFirst(',', '.'));
+    if (parsed == null || !parsed.isFinite || parsed <= 0) {
+      // Zero, negative or unparseable: the controller would ignore it, so
+      // show the value that is actually in force.
+      _ctrl.text = _formatSeconds(widget.value);
+      return;
     }
+    // Clamp in seconds before converting so a huge input never reaches
+    // Duration; any positive input is at least 1 ms, the request's resolution.
+    final maxSec = widget.maxSeconds, minSec = widget.minSeconds;
+    final maxMs = maxSec.isFinite && maxSec > 0
+        ? (maxSec * 1000).floor().clamp(1, _kMaxExposureMs)
+        : _kMaxExposureMs;
+    final minMs = minSec.isFinite && minSec > 0
+        ? (minSec * 1000).ceil().clamp(1, maxMs)
+        : 1;
+    final ms =
+        (parsed.clamp(0, maxMs / 1000) * 1000).round().clamp(minMs, maxMs);
+    final d = Duration(milliseconds: ms);
+    widget.onChanged(d);
+    _ctrl.text = _formatSeconds(d);
   }
 
   @override
@@ -169,7 +212,7 @@ class _DurationSecondsFieldState extends State<_DurationSecondsField> {
     super.didUpdateWidget(old);
     // Never fight the user's in-progress edit.
     if (_focus.hasFocus) return;
-    final expected = widget.value.inSeconds.toString();
+    final expected = _formatSeconds(widget.value);
     if (_ctrl.text != expected) _ctrl.text = expected;
   }
 
@@ -186,7 +229,7 @@ class _DurationSecondsFieldState extends State<_DurationSecondsField> {
       controller: _ctrl,
       focusNode: _focus,
       decoration: InputDecoration(labelText: widget.label),
-      keyboardType: TextInputType.number,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onSubmitted: _commit,
     );
   }
