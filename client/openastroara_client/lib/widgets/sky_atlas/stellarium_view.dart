@@ -298,10 +298,11 @@ class _StellariumViewState extends ConsumerState<StellariumView> {
     final targetName = (name == null || name.isEmpty) ? 'Target' : name;
     // §36/§38 — a DIALED framing position angle rides into the run as a
     // Center and Rotate at that angle (the rotate half executes since #806).
-    // The dial's untouched default (0°) keeps the plain blind slew: carrying
-    // it would make every framing run require a configured plate solver, and
-    // 0° almost always means "I didn't rotate", not "hold exactly 0°" — a
-    // deliberate 0° framing can still add centring in the sequence editor.
+    // The dial's untouched default (0°) keeps the plain slew, which the
+    // daemon centres when Settings → Plate Solving → "Center target after
+    // slew" is on (#1446): 0° almost always means "I didn't rotate", not
+    // "hold exactly 0°" — a deliberate 0° can still add Center and Rotate in
+    // the sequence editor.
     final rotationDeg = (event['rotationDeg'] as num?)?.toDouble();
     // Mosaic framing: the page sends the per-panel J2000 centres it drew
     // (row-major) — one target block per panel rides into the run.
@@ -328,7 +329,7 @@ class _StellariumViewState extends ConsumerState<StellariumView> {
     // A mosaic's panels only tile correctly when each slew is plate-solved to
     // the drawn grid, so mosaics ALWAYS carry the position angle (0° included)
     // and get Center and Rotate; a single frame keeps the old rule — a dialed
-    // angle upgrades the slew, the untouched 0° default stays a blind slew.
+    // angle upgrades the slew, the untouched 0° default stays a plain slew.
     final positionAngleDeg = isMosaic
         ? (rotationDeg ?? 0)
         : (rotationDeg != null && rotationDeg != 0)
