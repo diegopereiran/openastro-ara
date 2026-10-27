@@ -1621,7 +1621,7 @@ const List<Setting> settingsRegistry = [
   Setting(
     id: 'img.platesolve.center_after_slew',
     label: 'Center target after slew',
-    description: 'After a slew, plate-solve and re-slew until the target is within the convergence tolerance. Compensates for mount pointing error.',
+    description: 'After a slew, plate-solve and re-slew until the target is within the convergence tolerance. Compensates for mount pointing error. Applies to a sequence\'s Slew step too: if centering does not converge the step fails, and a Slew followed by a Center step centers twice.',
     keywords: ['center', 'slew', 'pointing', 'recenter', 'goto'],
     path: ['Settings', 'Imaging', 'Plate Solving'],
     type: SettingType.bool(),
