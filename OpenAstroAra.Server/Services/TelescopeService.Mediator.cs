@@ -303,7 +303,8 @@ public sealed partial class TelescopeService : ITelescopeMediator {
         async Task<bool> SlewCoreAsync() {
             // #1124 — a slew right after connect can beat the first refresh: read the system now
             // rather than guess. Still unknown → fail the instruction without sending anything
-            // (SlewScopeToRaDec ignores a false return, so a refusal must throw to be seen).
+            // (SlewScopeToRaDec's blind slew ignores a false return, so a refusal must throw to be seen;
+            // its centring path turns a false return into a failed step).
             var equatorialSystem = await ResolveEquatorialSystemAsync(client, token).ConfigureAwait(false);
             if (equatorialSystem is null) {
                 LogMountOpRejectedUnknownSystem("telescope.slew");

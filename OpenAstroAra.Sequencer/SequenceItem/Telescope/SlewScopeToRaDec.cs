@@ -106,7 +106,7 @@ namespace OpenAstroAra.Sequencer.SequenceItem.Telescope {
                 if (!await centeringExecutor.CenterAsync(Coordinates.Coordinates, progress, token)) {
                     // Same rule as Center and Rotate: an off-target field would quietly ruin every frame after it.
                     throw new SequenceEntityFailedException(
-                        "Centering after the slew did not converge within the profile's threshold/attempts (Settings → Plate Solving → Center target after slew).");
+                        "The mount refused the slew (parked, at a limit or target below the horizon), or centering did not converge within the profile's threshold/attempts (Settings → Plate Solving → Center target after slew).");
                 }
             } else {
                 await telescopeMediator.SlewToCoordinatesAsync(Coordinates.Coordinates, token);
