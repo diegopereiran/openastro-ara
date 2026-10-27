@@ -13,6 +13,7 @@
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -115,5 +116,64 @@ namespace OpenAstroAra.Equipment.Equipment.MyGuider.PHD2 {
             ThrowOnError("guiding_assistant_apply", response);
             return response.result?.Applied ?? Array.Empty<string>();
         }
+
+        /// <summary>
+        /// #1448 — what the guider now holds for each applied recommendation, read back from the guider
+        /// rather than taken from the recommendation (the exposure is a range the guider rounds to one of its
+        /// durations; the backlash pulse is capped). Ara writes these into its profile so its next push sends
+        /// them, not the values Apply just replaced. Best-effort: a getter the guider refuses leaves its
+        /// field null.
+        /// </summary>
+        public async Task<GuidingAssistantAppliedValues> ReadGuidingAssistantAppliedAsync(IReadOnlyList<string> applied, CancellationToken ct) {
+            ArgumentNullException.ThrowIfNull(applied);
+            async Task<JToken?> Get(string method, Dictionary<string, object>? p = null) {
+                ct.ThrowIfCancellationRequested();
+                var resp = await SendMessage<GenericPhdMethodResponse>(new Phd2NamedGetter(method, p), LiveRpcTimeoutMs, notifyOnError: false).ConfigureAwait(false);
+                return resp.error != null || resp.result is null ? null : JToken.FromObject(resp.result);
+            }
+            static double? D(JToken? t) => t?.Type is JTokenType.Float or JTokenType.Integer && double.IsFinite(t.Value<double>()) ? t.Value<double>() : null;
+            static int? I(JToken? t) => D(t) is double d ? (int)Math.Round(d) : null;
+            static string? S(JToken? t) => t?.Type == JTokenType.String && !string.IsNullOrWhiteSpace(t.Value<string>()) ? t.Value<string>() : null;
+            bool Has(string name) => applied.Contains(name, StringComparer.Ordinal);
+
+            // In parallel (each RPC is its own connection, as the advanced-settings read is): six sequential
+            // timeouts against a slow guider would keep Accept waiting. Every read is of the state Apply left.
+            Task<JToken?> GetIf(string name, string method, Dictionary<string, object>? p = null) =>
+                Has(name) ? Get(method, p) : Task.FromResult<JToken?>(null);
+            var exposureT = GetIf("exposure", "get_exposure");
+            var decAlgoT = GetIf("dec_algorithm", "get_algo", new() { ["axis"] = "dec" });
+            var raMinMoveT = GetIf("min_move_ra", "get_algo_param", new() { ["axis"] = "ra", ["name"] = "minMove" });
+            var decMinMoveT = GetIf("min_move_dec", "get_algo_param", new() { ["axis"] = "dec", ["name"] = "minMove" });
+            var decModeT = GetIf("dec_guide_mode", "get_dec_guide_mode");
+            var backlashT = GetIf("dec_backlash", "get_backlash_comp");
+            await Task.WhenAll(exposureT, decAlgoT, raMinMoveT, decMinMoveT, decModeT, backlashT).ConfigureAwait(false);
+            var b = await backlashT.ConfigureAwait(false);
+            var values = new GuidingAssistantAppliedValues {
+                ExposureMs = I(await exposureT.ConfigureAwait(false)),
+                DecAlgorithm = S(await decAlgoT.ConfigureAwait(false)),
+                MinMoveRaPx = D(await raMinMoveT.ConfigureAwait(false)),
+                MinMoveDecPx = D(await decMinMoveT.ConfigureAwait(false)),
+                DecGuideMode = S(await decModeT.ConfigureAwait(false)),
+                BacklashEnabled = b?["Enabled"]?.Type == JTokenType.Boolean ? b["Enabled"]!.Value<bool>() : null,
+                BacklashPulseMs = I(b?["PulseWidth"]),
+                BacklashFloorMs = I(b?["Floor"]),
+                BacklashCeilingMs = I(b?["Ceiling"]),
+            };
+            return values;
+        }
+    }
+
+    /// <summary>#1448 — the guider's values after a Guiding Assistant Apply, in the guider's units (ms, px)
+    /// and names (Dec mode "North", algorithm "Hysteresis"). Null = not applied, or the guider did not say.</summary>
+    public sealed record GuidingAssistantAppliedValues {
+        public int? ExposureMs { get; init; }
+        public double? MinMoveRaPx { get; init; }
+        public double? MinMoveDecPx { get; init; }
+        public string? DecGuideMode { get; init; }
+        public string? DecAlgorithm { get; init; }
+        public bool? BacklashEnabled { get; init; }
+        public int? BacklashPulseMs { get; init; }
+        public int? BacklashFloorMs { get; init; }
+        public int? BacklashCeilingMs { get; init; }
     }
 }
