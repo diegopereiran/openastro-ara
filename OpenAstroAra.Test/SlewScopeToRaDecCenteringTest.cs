@@ -88,7 +88,7 @@ namespace OpenAstroAra.Test {
         [Test]
         public async Task With_center_after_slew_on_the_step_centres_on_its_target() {
             var mount = Mount();
-            var centering = Centering(converges: true);
+            var centering = new Mock<ICenteringExecutor>();
             Coordinates? seen = null;
             centering.Setup(e => e.CenterAsync(It.IsAny<Coordinates>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
                 .Callback<Coordinates, IProgress<ApplicationStatus>, CancellationToken>((c, _, _) => seen = c)
