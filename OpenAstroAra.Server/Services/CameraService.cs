@@ -909,7 +909,7 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
     /// </summary>
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "Catalog-registration boundary: any DB failure after a successful FITS write degrades to an Error log naming the recoverable file (the §28.8 startup scan re-registers it) rather than faulting the capture worker. CA1031's log-and-recover boundary applies.")]
-    private async Task<bool> CaptureCoreAsync(AlpacaCamera client, Guid frameId, ExposureRequestDto request, string imageType, FrameType frameType, string targetName, CancellationToken ct, DateOnly? night = null) {
+    private async Task<bool> CaptureCoreAsync(AlpacaCamera client, Guid frameId, ExposureRequestDto request, string imageType, FrameType frameType, string targetName, CancellationToken ct, DateOnly? night = null, bool saveInBackground = false) {
         // §29 — per-frame pre-capture free-space check: the disk monitor polls every 60 s, and a
         // burst of large frames can fill the volume between ticks. Blocks BEFORE the shutter
         // opens (an exposure that can't be saved is wasted sky time) — but only when the volume
@@ -963,38 +963,80 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             coolerOn = _runtime.CoolerStateKnown ? _runtime.CoolerOn : null;
         }
         var conditions = await ReadConditionsBestEffortAsync(ct).ConfigureAwait(false);
-        var storeTiming = System.Diagnostics.Stopwatch.StartNew();
-        var filePath = WriteFrame(frameId, pixels, width, height, applied, imageType, capturedAt, focuserPos,
-            targetName: targetName, sensorTemp: sensorTemp, tempSetPoint: tempSetPoint, conditions: conditions,
-            pointing: pointing, rotatorMechanicalDeg: rotatorDeg, night: night);
-        var writeMs = storeTiming.ElapsedMilliseconds;
+        var job = new FrameSaveJob {
+            FrameId = frameId, Pixels = pixels, Width = width, Height = height, Request = request, Applied = applied,
+            ImageType = imageType, FrameType = frameType, TargetName = targetName, CapturedAt = capturedAt,
+            FocuserPosition = focuserPos, RotatorDeg = rotatorDeg, Pointing = pointing, SensorTemp = sensorTemp,
+            TempSetPoint = tempSetPoint, CoolerSetpointC = CoolerSetpointFrom(coolerOn, tempSetPoint), Conditions = conditions,
+            Night = night, SessionId = CaptureSessionScope.Current, CcdTemperatureC = CachedCcdTemperature(),
+        };
+        if (saveInBackground) {
+            if (frameType == FrameType.Light) {
+                // Recorded now, in capture order and before the sequencer's next step looks: Center
+                // After Drift reads the latest light right after the exposure returns. The feed waits
+                // for the save itself before it reads the frame (job.Saved).
+                RecordLightBestEffort(job);
+            }
+            // The sequencer's next exposure starts while this one is written (CameraService.Saving.cs).
+            await EnqueueSaveAsync(job, ct).ConfigureAwait(false);
+            return true;
+        }
         try {
-            await RegisterFrameAsync(frameId, request, frameType, targetName, capturedAt, filePath, width, height, focuserPos, appliedBin: applied.BinX,
-                rotatorMechanicalDeg: rotatorDeg, coolerSetpointC: CoolerSetpointFrom(coolerOn, tempSetPoint)).ConfigureAwait(false);
+            await SaveFrameAsync(job).ConfigureAwait(false);
         } catch (Exception ex) {
+            job.Saved.TrySetException(ex);
+            if (job.FilePath is null || job.Registered) {
+                throw;
+            }
             // The FITS is on disk but invisible to the catalog; name the path so an operator can
             // recover it — and the §28.8 startup orphan scan re-registers it on the next boot.
-            LogCatalogRegistrationFailed(ex, frameId, filePath);
+            LogCatalogRegistrationFailed(ex, frameId, job.FilePath);
             return false;
         }
-        LogCaptureComplete(frameId, width, height, filePath);
-        LogCaptureStoreTiming(frameId, writeMs, storeTiming.ElapsedMilliseconds - writeMs);
-        PrewarmPreview(frameId);
+        if (frameType == FrameType.Light) {
+            RecordLightBestEffort(job); // saved inline: only a light that landed becomes the latest
+        }
+        return true;
+    }
+
+    // Null when the camera reports no CCD temperature — recorded as NULL, not a fabricated 0.0
+    // (the same honesty rule as gain, #670). _runtime is written under _gate; read it there too.
+    private double? CachedCcdTemperature() {
+        lock (_gate) {
+            return _runtime.CcdTemperature;
+        }
+    }
+
+    /// <summary>Enrichment once a frame is on disk and in the catalog, all off the capture path.</summary>
+    private void AfterFrameSaved(FrameSaveJob job) {
+        PrewarmPreview(job.FrameId);
         // #1140 P2 — the sky background is measured for EVERY frame type, off the capture path and
         // apart from the HFR queue: a flat or dark records its level, a starless or cloudy light
         // still has a background the calibration fit can read, and a light the 2-slot HFR queue
         // had to drop is measured all the same.
-        _ = Task.Run(() => MeasureBackgroundAsync(frameId, pixels), CancellationToken.None);
-        if (frameType == FrameType.Light) {
-            _savedLights?.RecordLightSaved(frameId);
+        _ = Task.Run(() => MeasureBackgroundAsync(job.FrameId, job.Pixels), CancellationToken.None);
+        if (job.FrameType == FrameType.Light) {
             // §59.5 — off the capture path: HFR/star analysis of a full frame takes real CPU
             // time, and delaying frame.complete (or the next exposure) for a statistic is the
             // wrong trade. The pixels are already in hand; the write-back lands as
             // frame.analyzed when done.
-            QueueFrameAnalysis(frameId, pixels, width, height,
-                string.IsNullOrWhiteSpace(request.FilterName) ? null : request.FilterName, request.ExposureSec);
+            QueueFrameAnalysis(job.FrameId, job.Pixels, job.Width, job.Height,
+                string.IsNullOrWhiteSpace(job.Request.FilterName) ? null : job.Request.FilterName, job.Request.ExposureSec);
         }
-        return true;
+        FrameSavedHook?.Invoke(job.FrameId);
+    }
+
+    // Test seam: runs last in the post-save enrichment.
+    internal Action<Guid>? FrameSavedHook { get; set; }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types",
+        Justification = "The solve feed is enrichment for Center After Drift: its fault must never cost the frame.")]
+    private void RecordLightBestEffort(FrameSaveJob job) {
+        try {
+            _savedLights?.RecordLightSaved(job.FrameId, job.Saved.Task);
+        } catch (Exception ex) {
+            LogFrameEnrichmentFailed(ex, job.FrameId);
+        }
     }
 
     /// <summary>#1140 P2 — one count-array pass over the frame, written to the catalog row. Best
@@ -1830,23 +1872,20 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
     // appliedBin: the binning the driver ACTUALLY used (read back after the exposure, like XBINNING in
     // the header), not the requested one — a driver can coerce a 2 to 1, and the #1140 pixel scale
     // must follow the frame. Null = no read-back available (the request's value is the best we have).
-    internal async Task RegisterFrameAsync(Guid frameId, ExposureRequestDto request, FrameType frameType, string targetName, DateTimeOffset capturedAt, string filePath, int width, int height, int? focuserPosition = null, int? appliedBin = null, double? rotatorMechanicalDeg = null, double? coolerSetpointC = null) {
+    internal async Task RegisterFrameAsync(Guid frameId, ExposureRequestDto request, FrameType frameType, string targetName, DateTimeOffset capturedAt, string filePath, int width, int height, int? focuserPosition = null, int? appliedBin = null, double? rotatorMechanicalDeg = null, double? coolerSetpointC = null, Guid? sessionId = null, double? ccdTemperatureC = null) {
         // §40/§50 — a capture that runs INSIDE a sequence run carries the run's
         // catalog session via the ambient CaptureSessionScope (AsyncLocal set by
         // the run worker); everything else — the REST snapshot path — falls back
         // to the shared manual-capture bucket as before.
-        var sessionId = CaptureSessionScope.Current
+        // A background save passes the session it was captured in: the run may have moved on by now.
+        sessionId ??= CaptureSessionScope.Current
             ?? await _frames!.EnsureManualCaptureSessionAsync(CancellationToken.None).ConfigureAwait(false);
         var fileSize = new FileInfo(filePath).Length;
-        double? ccdTemp;
-        lock (_gate) {
-            // Null when the camera reports no CCD temperature — recorded as NULL,
-            // not a fabricated 0.0 (the same honesty rule as gain, #670).
-            ccdTemp = _runtime.CcdTemperature; // _runtime is written under _gate; read it there too
-        }
+        // A background save passes the reading taken at capture; registration may run a frame later.
+        var ccdTemp = ccdTemperatureC ?? CachedCcdTemperature();
         await _frames!.InsertAsync(new FrameDto(
             Id: frameId,
-            SessionId: sessionId,
+            SessionId: sessionId.Value,
             TargetName: targetName,
             FrameType: frameType,
             FilterName: string.IsNullOrWhiteSpace(request.FilterName) ? null : request.FilterName,
@@ -2461,6 +2500,13 @@ public sealed partial class CameraService : ICameraService, IRetainedDeviceSourc
             IdempotencyKey: idempotencyKey);
 
     public void Dispose() {
+        lock (_gate) {
+            if (_disposed) {
+                return;
+            }
+        }
+        // The run's last frames land before the camera goes (bounded; a stuck save is logged).
+        FinishPendingSavesForDispose();
         AlpacaCamera? client;
         lock (_gate) {
             if (_disposed) {
