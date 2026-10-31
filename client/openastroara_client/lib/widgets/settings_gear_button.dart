@@ -6,7 +6,7 @@ import '../state/settings/settings_nav.dart';
 import '../theme/ara_colors.dart';
 
 /// Top-bar gear that opens Settings. Settings left the nav rail, which keeps
-/// the night's workflow only (Planning → Setup → Run → Live); the gear is lit
+/// the night's workflow only (Planning → Checklist → Sequence → Live); the gear is lit
 /// while Settings is showing.
 class SettingsGearButton extends ConsumerWidget {
   const SettingsGearButton({super.key});

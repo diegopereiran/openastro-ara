@@ -57,10 +57,10 @@ class AppShell extends ConsumerStatefulWidget {
 class _AppShellState extends ConsumerState<AppShell> {
   static const _tabs = <_TabSpec>[
     _TabSpec(icon: Icons.public, label: 'Planning', body: PlanningTab()),
-    _TabSpec(icon: Icons.checklist, label: 'Setup', body: SetupTab()),
+    _TabSpec(icon: Icons.checklist, label: 'Checklist', body: SetupTab()),
     _TabSpec(
       icon: Icons.play_circle_outline,
-      label: 'Run',
+      label: 'Sequence',
       body: SequencerTab(),
     ),
     _TabSpec(icon: Icons.camera_alt, label: 'Live', body: ImagingTab()),
@@ -85,16 +85,16 @@ class _AppShellState extends ConsumerState<AppShell> {
       'kOptionsTabIndex must point at the Settings tab, the last one (the rail lists the tabs before it).',
     );
     assert(
-      _tabs[kRunTabIndex].label == 'Run',
-      'kRunTabIndex must point at the Run tab — update it if _tabs is reordered.',
+      _tabs[kRunTabIndex].label == 'Sequence',
+      'kRunTabIndex must point at the Sequence tab — update it if _tabs is reordered.',
     );
     assert(
       _tabs[kPlanningTabIndex].label == 'Planning',
       'kPlanningTabIndex must point at the Planning tab — update it if _tabs is reordered.',
     );
     assert(
-      _tabs[kSetupTabIndex].label == 'Setup',
-      'kSetupTabIndex must point at the Setup tab — update it if _tabs is reordered.',
+      _tabs[kSetupTabIndex].label == 'Checklist',
+      'kSetupTabIndex must point at the Checklist tab — update it if _tabs is reordered.',
     );
     assert(
       _tabs[kLiveTabIndex].label == 'Live',

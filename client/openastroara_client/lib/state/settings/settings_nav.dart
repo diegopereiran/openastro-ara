@@ -25,7 +25,7 @@ const int kRunTabIndex = 2;
 /// The app-shell tab indices of the **Planning**, **Setup** and **Live** tabs
 /// — guarded by the same app_shell asserts, so every tab constant fails
 /// loudly on a rail reorder. Setup landed with the §25 flow redesign (the
-/// rail reads as the night: Plan → Setup → Run → Live; Settings is the
+/// rail reads as the night: Planning → Checklist → Sequence → Live; Settings is the
 /// top-bar gear).
 const int kPlanningTabIndex = 0;
 const int kSetupTabIndex = 1;
