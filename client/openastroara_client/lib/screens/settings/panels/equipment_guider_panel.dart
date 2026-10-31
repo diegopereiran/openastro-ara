@@ -24,12 +24,6 @@ import '../../../widgets/profile/profile_import_flow.dart'
 import '../../../widgets/settings/editable_field.dart';
 import '../../../widgets/settings/settings_row.dart';
 
-/// §63 OpenAstro Guider panel — editable. Phase 12h.6k added the daemon
-/// round-trip for the §63 OpenAstro Guider fields (host/port/profile + dithering +
-/// per-session calibration). The §52.2 auto-connect-on-boot toggle uses
-/// `equipmentConnectionProvider` and round-trips with the bulk
-/// equipment-connection sub-PR; the §35 meridian-flip re-cal toggle is
-/// surfaced read-only here as a reference — edit it in Safety → Policies.
 /// The guider Profile picker's entries: Automatic first, naming the profile the
 /// guider is on when it reports one, then the guider's own profiles. A pinned
 /// profile the guider no longer lists (or a guider not connected) stays visible.
@@ -39,6 +33,12 @@ Map<int, String> guiderProfileItems(int pinned, Map<int, String> profiles, Strin
       if (pinned != 0 && !profiles.containsKey(pinned)) pinned: 'Profile #$pinned',
     };
 
+/// §63 OpenAstro Guider panel — editable. Phase 12h.6k added the daemon
+/// round-trip for the §63 OpenAstro Guider fields (host/port/profile + dithering +
+/// per-session calibration). The §52.2 auto-connect-on-boot toggle uses
+/// `equipmentConnectionProvider` and round-trips with the bulk
+/// equipment-connection sub-PR; the §35 meridian-flip re-cal toggle is
+/// surfaced read-only here as a reference — edit it in Safety → Policies.
 class EquipmentGuiderPanel extends ConsumerStatefulWidget {
   const EquipmentGuiderPanel({super.key});
 

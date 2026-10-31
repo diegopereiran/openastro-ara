@@ -492,8 +492,8 @@ public sealed record GuiderStateDto(
     string? CalibrationDirection = null,
     int? CalibrationStep = null,
     double? CalibrationDistancePx = null,
-    /// <summary>The guider's profiles (its <c>get_profiles</c>), for the Settings profile picker. Null while
-    /// no guider has connected.</summary>
+    /// <summary>The guider's profiles (its <c>get_profiles</c>), for the Settings profile picker. Empty until
+    /// the guider has listed its profiles; null only while there is no guider at all.</summary>
     System.Collections.Generic.IReadOnlyList<GuiderProfileDto>? Profiles = null);
 
 /// <summary>One guider profile: the daemon's id and its name.</summary>

@@ -42,6 +42,20 @@ This file captures the *reasoning* behind each contract decision — DTO shapes,
 **Related:** §X.Y of PORT_PLAYBOOK.md, PR #N
 ```
 
+### 2026-11-01 — The guider profile picker: `runtime.profiles` and `phd2_profile_id`
+
+**Endpoint(s) or area:** `GET /api/v1/equipment/guider` — `runtime.profiles` (`GuiderStateDto.Profiles`); `GET/PUT /api/v1/profile/phd2` — `phd2_profile_id` (`Phd2SettingsDto.Phd2ProfileId`).
+
+**Decision:** `runtime.profiles` lists the guider's profiles as `[{ "id": int, "name": string }]`, from its `get_profiles` (an immutable copy the guider swaps in after each refresh, so a status read never sees a half-rebuilt list). It is empty until the guider has listed its profiles, and absent from older daemons; clients treat both as "no profiles to offer". `phd2_profile_id` is the guider profile to select on connect, by that id: `null` (or `0`) means Automatic, the §63.4 guider profile named after the active Ara profile; a positive id is applied to `GuiderSettings.PHD2ProfileId`, which the connect path already honours as the explicit override (select by id). The free-text `phd2_profile` field stays on the wire for older profiles and clients but is still not read by anything.
+
+**Reasoning:** the Settings guider page offered a free-text "Profile" field that the daemon stored and never used, so typing a name did nothing. A picker needs the guider's real profile list, and an override needs an id rather than a name, because names are user-editable on the guider side while the id is what `set_profile` takes.
+
+**Spec ref:** `Contracts/EquipmentDtos.cs` (`GuiderStateDto.Profiles`, `GuiderProfileDto`), `Contracts/ProfileDtos.cs` (`Phd2SettingsDto.Phd2ProfileId`), `Services/GuiderService.cs` (`GetAsync`), `Services/StoreBackedProfileService.cs` (`ApplyPhd2`), `Equipment/MyGuider/PHD2/PHD2Guider.cs` (`ProfilesSnapshot`); client `models/guider_status.dart`, `screens/settings/panels/equipment_guider_panel.dart` (`guiderProfileItems`).
+
+**Related:** §63.4, PR #1474.
+
+---
+
 ### 2026-10-27 — Guiding Assistant Apply also writes Ara's profile; the Dec guide mode is always pushed (#1448)
 
 **Endpoint(s) or area:** `POST /api/v1/equipment/guider/live/assistant/apply` (same request and `{ applied[] }` answer); `GET/PUT /api/v1/profile/phd2` and `/profile/guider-advanced` now change after an Apply; every guider push (`POST /equipment/guider/profile/push`, both scopes, and the connect push) sends `set_dec_guide_mode`.
@@ -556,7 +570,7 @@ The card now keeps a known device's card while it is not live: name, state chip,
 
 **Endpoint(s) or area:** `GET /api/v1/equipment/guider` — `runtime.state` (`GuiderStateDto.State`).
 
-**Decision:** `runtime.state` is one of `stopped` | `looping` | `star_selected` | `calibrating` | `guiding` | `settling` | `paused` | `star_lost` | `assistant`. `assistant` (2026-10-18) is what Guiding, Looping or Selected read while the Guiding Assistant measures (PHD2 says "Guiding" with corrections off): no polar-alignment residual is measured and the lost-star watch stands down for the run; the flag follows the assistant RPCs and the guider's own Progress/Done events. `looping` (exposures looping, no star chosen) and `star_selected` (looping with a star chosen) used to read `stopped`; `settling` is `guiding` while the guider settles after a dither or a start. `dithering`, listed before, was never sent and still is not. A token a client does not know is read as an unknown phase — the Ara client shows *Unknown* (the guiding strip, *connected*) — never as `stopped`. Clients use one wording for every phase (the Live strip in lower case, the guider dialog and the Run tab) and, while `calibrating`, append the leg from `calibration_*`.
+**Decision:** `runtime.state` is one of `stopped` | `looping` | `star_selected` | `calibrating` | `guiding` | `settling` | `paused` | `star_lost` | `assistant`. `assistant` (2026-10-18) is what Guiding, Looping or Selected read while the Guiding Assistant measures (PHD2 says "Guiding" with corrections off): no polar-alignment residual is measured and the lost-star watch stands down for the run; the flag follows the assistant RPCs and the guider's own Progress/Done events. `looping` (exposures looping, no star chosen) and `star_selected` (looping with a star chosen) used to read `stopped`; `settling` is `guiding` while the guider settles after a dither or a start. `dithering`, listed before, was never sent and still is not. A token a client does not know is read as an unknown phase — the Ara client shows *Unknown* (the guiding strip, *connected*) — never as `stopped`. Clients use one wording for every phase (the Live strip in lower case, the guider Settings page's connection card and the Run tab) and, while `calibrating`, append the leg from `calibration_*`.
 
 **Reasoning:** field night 2026-10-16: the strip said "stopped" while the guide camera was looping (and refused a single frame for guide-camera focus), and the Run tab said nothing while the guider calibrated for five minutes.
 
