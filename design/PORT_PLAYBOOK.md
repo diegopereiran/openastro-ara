@@ -1904,7 +1904,7 @@ backgrounded `flutter run` exits ("Lost connection to device") and takes the app
 ```bash
 cd client/openastroara_client
 flutter build macos --debug    # or: flutter run -d macos  (foreground only)
-open build/macos/Build/Products/Debug/openastroara.app
+open "build/macos/Build/Products/Debug/OpenAstro Ara.app"
 ```
 Every launch scans the network (nothing about the rig is stored, #1129) and you
 pick the rig from the list. A connected device's state lives daemon-side, so the
