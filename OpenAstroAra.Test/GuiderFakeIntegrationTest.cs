@@ -182,6 +182,8 @@ namespace OpenAstroAra.Test {
         public async Task Reading_the_guider_state_while_the_profile_list_is_rebuilt_never_throws() {
             // The guider rebuilds AvailableProfiles (Clear + Add) on its own thread during a connect or a
             // profile switch; a GET polling at that moment must not enumerate the live collection.
+            // A guard on GuiderService reading ProfilesSnapshot: pointed back at the live collection, this
+            // fails with a torn read (ArgumentOutOfRange / "Collection was modified").
             var (fake, svc) = await ConnectedServiceAsync().ConfigureAwait(false);
             await using var _ = fake;
             using var __ = svc;
