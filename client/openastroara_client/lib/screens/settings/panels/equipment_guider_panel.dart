@@ -55,6 +55,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
   // edit so a burst of changes is one PUT. Nothing saves until the panel has
   // loaded the stored settings, and a pending save is flushed on leaving.
   bool _hydrated = false;
+  bool _loading = false; // the load's own state writes are not edits
   bool _syncingDerived = false;
   Timer? _autoSave;
   Future<void> Function()? _pendingFlush;
@@ -96,6 +97,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
   Future<void> _hydrate() async {
     final api = _api();
     if (api == null) return;
+    _loading = true;
     try {
       // §63.19 — optics first: the OAG-derived guide focal length reads the
       // main optics section, which is hydrated by a different panel.
@@ -104,6 +106,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
       _syncDerivedFocalLength();
       _savedJson = _json();
       _hydrated = true;
+      _loading = false;
       final phd2 = ref.read(phd2SettingsProvider);
       // Choices already loaded before this panel built: ref.listen only
       // fires on a later change, so resolve their servers here too.
@@ -115,6 +118,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
       ];
       await _resolveAlpacaNames(endpoints);
     } catch (e) {
+      _loading = false;
       if (mounted) {
         setState(
           () =>
@@ -148,7 +152,18 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
   }
 
   void _scheduleSave() {
-    if (!_hydrated || _syncingDerived) return;
+    if (_syncingDerived || _loading) return;
+    if (!_hydrated) {
+      // Never save over the rig's settings when they never loaded; say the
+      // edit was not kept instead of dropping it silently.
+      const msg = "Not saved: your guider settings haven't loaded from the rig. "
+          'Reopen this page once connected.';
+      if (_lastError != msg) {
+        setState(() => _lastError = msg);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(msg)));
+      }
+      return;
+    }
     if (_json() == _savedJson) {
       _autoSave?.cancel(); // changed back before the save went out
       return;

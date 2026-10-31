@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,8 +45,10 @@ class _FakeProfileApi extends ProfileApi {
   Phd2Settings stored;
   Phd2Settings? lastPut;
   int puts = 0;
+  bool failGet = false;
   @override
-  Future<Phd2Settings> getPhd2Settings() async => stored;
+  Future<Phd2Settings> getPhd2Settings() async =>
+      failGet ? throw DioException(requestOptions: RequestOptions(path: "/profile/phd2")) : stored.copyWith();
   @override
   Future<Phd2Settings> putPhd2Settings(Phd2Settings value) async {
     lastPut = value;
@@ -126,10 +129,10 @@ typedef _Harness = ({
   _FakeAlpacaNames names,
 });
 
-Future<_Harness> _pump(WidgetTester tester, Phd2Settings stored, {ValueListenable<bool>? show}) async {
+Future<_Harness> _pump(WidgetTester tester, Phd2Settings stored, {ValueListenable<bool>? show, bool failLoad = false}) async {
   await tester.binding.setSurfaceSize(const Size(1600, 2400));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  final profile = _FakeProfileApi(stored);
+  final profile = _FakeProfileApi(stored)..failGet = failLoad;
   final equipment = _FakeEquipmentApi();
   final names = _FakeAlpacaNames();
   await tester.pumpWidget(
@@ -244,6 +247,7 @@ void main() {
       (tester) async {
     final h = await _pump(tester, const Phd2Settings(ditherEnabled: true));
     expect(h.profile.lastPut, isNull, reason: 'loading the page saves nothing');
+    expect(find.textContaining('Not saved'), findsNothing, reason: 'loading is not an edit');
     final container = ProviderScope.containerOf(tester.element(find.byType(EquipmentGuiderPanel)));
     expect(container.read(panelSaveActionProvider), isNull, reason: 'no header Save button');
 
@@ -296,6 +300,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(h.equipment.calls, contains('push'));
     expect(h.profile.puts, 1);
+  });
+
+  testWidgets('when the settings could not load, an edit says it was not saved instead of vanishing',
+      (tester) async {
+    final h = await _pump(tester, const Phd2Settings(ditherEnabled: true), failLoad: true);
+    final toggle = find.descendant(
+        of: find.widgetWithText(SettingsSwitchRow, 'Enable dithering'), matching: find.byType(Switch));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(h.profile.lastPut, isNull, reason: 'never overwrite the rig with settings that did not load');
+    expect(find.textContaining('Not saved'), findsWidgets);
   });
 
   testWidgets('a mount on another server than the camera gets a cross-server warning',
