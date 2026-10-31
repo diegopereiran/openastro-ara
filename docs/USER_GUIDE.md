@@ -76,7 +76,7 @@ health pill (see §9) turns amber/red until it clears.
 
 ### Smart Focus (Setup → Smart Focus)
 
-The Setup tab's checklist has a **Smart Focus** step between Connect equipment and Polar align.
+The Checklist tab has a **Smart Focus** step between Connect equipment and Polar align.
 
 - **Main telescope** — **Run autofocus** starts the daemon's sweep with your autofocus settings and
   shows it live: the coarse search, then every probe on the V-curve, the fitted curve and the best
