@@ -23,6 +23,7 @@ import '../widgets/safety_alarm_listener.dart';
 import '../widgets/stop_mount_overlay.dart';
 import '../widgets/equipment/equipment_status_chip.dart';
 import '../widgets/help_dialog.dart';
+import '../widgets/settings_gear_button.dart';
 import '../widgets/launchpad_button.dart';
 import '../widgets/ws_connection_indicator.dart';
 import 'calibration/calibration_screen.dart';
@@ -63,7 +64,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       body: SequencerTab(),
     ),
     _TabSpec(icon: Icons.camera_alt, label: 'Live', body: ImagingTab()),
-    _TabSpec(icon: Icons.settings, label: 'Options', body: OptionsTab()),
+    _TabSpec(icon: Icons.settings, label: 'Settings', body: OptionsTab()),
   ];
 
   @override
@@ -80,8 +81,8 @@ class _AppShellState extends ConsumerState<AppShell> {
     // to update the constant trips this in debug instead of silently navigating
     // to the wrong tab.
     assert(
-      _tabs[kOptionsTabIndex].label == 'Options',
-      'kOptionsTabIndex must point at the Options tab — update it if _tabs is reordered.',
+      _tabs[kOptionsTabIndex].label == 'Settings' && kOptionsTabIndex == _tabs.length - 1,
+      'kOptionsTabIndex must point at the Settings tab, the last one (the rail lists the tabs before it).',
     );
     assert(
       _tabs[kRunTabIndex].label == 'Run',
@@ -150,13 +151,15 @@ class _AppShellState extends ConsumerState<AppShell> {
                           child: Row(
                             children: [
                               NavigationRail(
-                                selectedIndex: selectedTab,
+                                // Settings opens from the top-bar gear, so the
+                                // rail lists the workflow tabs only.
+                                selectedIndex: railIndexFor(selectedTab),
                                 onDestinationSelected: (i) => ref
                                     .read(selectedTabIndexProvider.notifier)
                                     .select(i),
                                 labelType: NavigationRailLabelType.all,
                                 destinations: [
-                                  for (final t in _tabs)
+                                  for (final t in _tabs.take(kOptionsTabIndex))
                                     NavigationRailDestination(
                                       icon: Icon(t.icon),
                                       label: Text(t.label),
@@ -287,6 +290,7 @@ class _TopEquipmentBar extends StatelessWidget {
               },
             ),
           ),
+          const SettingsGearButton(),
           // §61.1 — visible magnifying-glass icon on the right side of the
           // top bar. Opens the same `showCommandPalette` dialog that ⌘K
           // launches; tooltip surfaces the platform-correct shortcut so

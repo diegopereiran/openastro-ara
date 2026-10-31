@@ -300,7 +300,7 @@ const List<SettingsSearchEntry> _navEntries = <SettingsSearchEntry>[
   ),
   SettingsSearchEntry(
     tabIndex: kOptionsTabIndex,
-    label: 'Go to Options',
+    label: 'Go to Settings',
     groupLabel: 'Navigate',
     keywords: ['options', 'settings', 'preferences', 'configuration'],
   ),

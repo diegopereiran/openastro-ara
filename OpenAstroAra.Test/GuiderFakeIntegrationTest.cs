@@ -168,6 +168,17 @@ namespace OpenAstroAra.Test {
         }
 
         [Test]
+        public async Task The_guider_state_lists_the_guider_profiles_for_the_profile_picker() {
+            var (fake, svc) = await ConnectedServiceAsync().ConfigureAwait(false);
+            await using var _ = fake;
+            using var __ = svc;
+            var profiles = (await svc.GetAsync(CancellationToken.None).ConfigureAwait(false))!.Runtime.Profiles;
+            Assert.That(profiles, Is.Not.Null);
+            Assert.That(profiles!.Select(p => (p.Id, p.Name)), Does.Contain((1, "My Equipment")),
+                "the daemon's get_profiles list reaches the client, id + name");
+        }
+
+        [Test]
         public async Task The_guider_state_carries_the_calibration_leg_until_calibration_ends() {
             var (fake, svc) = await ConnectedServiceAsync().ConfigureAwait(false);
             await using var _ = fake;

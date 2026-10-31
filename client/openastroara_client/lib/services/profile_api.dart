@@ -863,6 +863,7 @@ class ProfileApi {
     guideExposureMaxMs: (j['guide_exposure_max_ms'] as num?)?.toInt() ?? 6000,
     guideExposureMs: (j['guide_exposure_ms'] as num?)?.toInt() ?? 0,
     guideCameraGain: (j['guide_camera_gain'] as num?)?.toInt() ?? 50,
+    guiderProfileId: (j['phd2_profile_id'] as num?)?.toInt() ?? 0,
   );
 
   static Map<String, dynamic> _phd2SettingsToJson(Phd2Settings v) => {
@@ -896,6 +897,7 @@ class ProfileApi {
     'guide_exposure_max_ms': v.guideExposureMaxMs,
     'guide_exposure_ms': v.guideExposureMs,
     'guide_camera_gain': v.guideCameraGain,
+    'phd2_profile_id': v.guiderProfileId > 0 ? v.guiderProfileId : null,
   };
 
   // ── Diagnostics mode JSON mapping ──────────────────────────────────────

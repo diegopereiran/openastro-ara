@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openastroara/widgets/equipment/guider_calibration_dialog.dart';
+import 'package:openastroara/state/settings/panel_save_registry.dart';
+import 'package:openastroara/widgets/settings/editable_field.dart';
+import 'package:openastroara/widgets/equipment/guider_dialog.dart';
 import 'package:openastroara/models/guider_equipment_choices.dart';
 import 'package:openastroara/models/server.dart';
 import 'package:openastroara/screens/settings/panels/equipment_guider_panel.dart';
@@ -192,6 +196,47 @@ void main() {
           isNull);
       expect(describeUnservedAlpacaSelection(const Phd2Settings()), isNull);
     });
+  });
+
+  testWidgets('the panel embeds the guider link and the calibration screen entry (no popup)',
+      (tester) async {
+    await _pump(tester, const Phd2Settings());
+    expect(find.byType(GuiderConnectionSection), findsOneWidget);
+    expect(find.byType(GuiderCalibrationSection), findsOneWidget);
+  });
+
+  testWidgets('the guider profile is a picker with Automatic first, not a free-text field',
+      (tester) async {
+    await _pump(tester, const Phd2Settings());
+    final row = find.byKey(const ValueKey('guider_profile_picker'));
+    expect(row, findsOneWidget);
+    expect(find.descendant(of: row, matching: find.text('Automatic')), findsOneWidget,
+        reason: 'no guider connected: nothing to name yet');
+    expect(find.widgetWithText(EditableTextRow, 'Profile'), findsNothing);
+  });
+
+  test('Automatic names the profile the guider is using; a pinned profile it no longer lists stays visible', () {
+    expect(guiderProfileItems(0, const {1: 'Default', 4: 'Skywatcher 72ED'}, 'Skywatcher 72ED'),
+        {0: 'Automatic (Skywatcher 72ED)', 1: 'Default', 4: 'Skywatcher 72ED'});
+    expect(guiderProfileItems(0, const {}, null), {0: 'Automatic'});
+    expect(guiderProfileItems(9, const {1: 'Default'}, 'Default'),
+        {0: 'Automatic (Default)', 1: 'Default', 9: 'Profile #9'});
+  });
+
+  testWidgets('a change saves on its own, like the device pages: no Save button, nothing saved on load',
+      (tester) async {
+    final h = await _pump(tester, const Phd2Settings(ditherEnabled: true));
+    expect(h.profile.lastPut, isNull, reason: 'loading the page saves nothing');
+    final container = ProviderScope.containerOf(tester.element(find.byType(EquipmentGuiderPanel)));
+    expect(container.read(panelSaveActionProvider), isNull, reason: 'no header Save button');
+
+    final toggle = find.descendant(
+        of: find.widgetWithText(SettingsSwitchRow, 'Enable dithering'), matching: find.byType(Switch));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(h.profile.lastPut?.ditherEnabled, isFalse);
   });
 
   testWidgets('a mount on another server than the camera gets a cross-server warning',

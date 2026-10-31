@@ -491,7 +491,13 @@ public sealed record GuiderStateDto(
     /// the leg's start in guide-camera pixels. Null otherwise.</summary>
     string? CalibrationDirection = null,
     int? CalibrationStep = null,
-    double? CalibrationDistancePx = null);
+    double? CalibrationDistancePx = null,
+    /// <summary>The guider's profiles (its <c>get_profiles</c>), for the Settings profile picker. Null while
+    /// no guider has connected.</summary>
+    System.Collections.Generic.IReadOnlyList<GuiderProfileDto>? Profiles = null);
+
+/// <summary>One guider profile: the daemon's id and its name.</summary>
+public sealed record GuiderProfileDto(int Id, string Name);
 
 /// <summary>
 /// #1364 — the live guide-camera view (<c>GET /equipment/guider/live</c>): what the guider is doing

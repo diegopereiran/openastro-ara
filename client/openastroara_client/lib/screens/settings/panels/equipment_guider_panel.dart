@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../../util/friendly_error.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,13 +8,15 @@ import '../../../models/guider_equipment_choices.dart';
 import '../../../services/alpaca_device_names_api.dart';
 import '../../../services/profile_api.dart';
 import '../../../state/guider/guider_equipment_state.dart';
+import '../../../state/guider/guider_state.dart';
 import '../../../state/profile_management_state.dart';
 import '../../../state/settings/equipment_connection_state.dart';
 import '../../../state/settings/optics_settings_state.dart';
-import '../../../state/settings/panel_save_registry.dart';
 import '../../../state/settings/phd2_settings_state.dart';
 import '../../../util/guide_optics.dart';
 import '../../../util/host_port.dart';
+import '../../../widgets/equipment/guider_calibration_dialog.dart';
+import '../../../widgets/equipment/guider_dialog.dart';
 import '../../../widgets/guider/guider_setup_wizard.dart';
 import '../../../widgets/profile/profile_import_flow.dart'
     show friendlyDaemonError;
@@ -25,6 +29,15 @@ import '../../../widgets/settings/settings_row.dart';
 /// `equipmentConnectionProvider` and round-trips with the bulk
 /// equipment-connection sub-PR; the §35 meridian-flip re-cal toggle is
 /// surfaced read-only here as a reference — edit it in Safety → Policies.
+/// The guider Profile picker's entries: Automatic first, naming the profile the
+/// guider is on when it reports one, then the guider's own profiles. A pinned
+/// profile the guider no longer lists (or a guider not connected) stays visible.
+Map<int, String> guiderProfileItems(int pinned, Map<int, String> profiles, String? current) => {
+      0: current == null || current.isEmpty ? 'Automatic' : 'Automatic ($current)',
+      ...profiles,
+      if (pinned != 0 && !profiles.containsKey(pinned)) pinned: 'Profile #$pinned',
+    };
+
 class EquipmentGuiderPanel extends ConsumerStatefulWidget {
   const EquipmentGuiderPanel({super.key});
 
@@ -33,9 +46,16 @@ class EquipmentGuiderPanel extends ConsumerStatefulWidget {
       _EquipmentGuiderPanelState();
 }
 
-class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
-    with PanelSaveRegistration {
+class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
   String? _lastError;
+
+  // Every change saves on its own (like the device pages), shortly after the
+  // edit so a burst of changes is one PUT. Nothing saves until the panel has
+  // loaded the stored settings, and a pending save is flushed on leaving.
+  bool _hydrated = false;
+  bool _syncingDerived = false;
+  Timer? _autoSave;
+  Future<void> Function()? _pendingFlush;
 
   // §63.17 guider equipment — transient discovery/apply UI state.
   bool _discovering = false;
@@ -75,6 +95,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
       await ref.read(opticsSettingsProvider.notifier).hydrateFromServer(api);
       await ref.read(phd2SettingsProvider.notifier).hydrateFromServer(api);
       _syncDerivedFocalLength();
+      _hydrated = true;
       final phd2 = ref.read(phd2SettingsProvider);
       // Choices already loaded before this panel built: ref.listen only
       // fires on a later change, so resolve their servers here too.
@@ -103,18 +124,42 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
   void _syncDerivedFocalLength() {
     if (ref.read(phd2SettingsProvider).guiderSetupType != 'oag') return;
     final optics = ref.read(opticsSettingsProvider);
-    ref
-        .read(phd2SettingsProvider.notifier)
-        .setGuideFocalLength(
-          derivedOagGuideFocalLength(
-            optics.focalLengthMm,
-            optics.reducerFactor,
-          ),
-        );
+    _syncingDerived = true;
+    try {
+      ref
+          .read(phd2SettingsProvider.notifier)
+          .setGuideFocalLength(
+            derivedOagGuideFocalLength(
+              optics.focalLengthMm,
+              optics.reducerFactor,
+            ),
+          );
+    } finally {
+      _syncingDerived = false;
+    }
+  }
+
+  void _scheduleSave() {
+    if (!_hydrated || _syncingDerived) return;
+    final api = _api();
+    final notifier = ref.read(phd2SettingsProvider.notifier);
+    _pendingFlush = api == null ? null : () => notifier.persistToServer(api);
+    _autoSave?.cancel();
+    _autoSave = Timer(const Duration(milliseconds: 500), () {
+      _pendingFlush = null;
+      _save();
+    });
   }
 
   @override
-  Future<void> panelSave() => _save();
+  void dispose() {
+    // Leaving the page right after an edit still saves it.
+    if (_autoSave?.isActive ?? false) {
+      _autoSave!.cancel();
+      _pendingFlush?.call().ignore();
+    }
+    super.dispose();
+  }
 
   Future<void> _save() async {
     setState(() => _lastError = null);
@@ -130,8 +175,6 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
     _syncDerivedFocalLength();
     try {
       await ref.read(phd2SettingsProvider.notifier).persistToServer(api);
-      if (!mounted) return;
-      messenger.showSnackBar(const SnackBar(content: Text('Saved.')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _lastError = friendlyError(e, action: 'save that'));
@@ -285,11 +328,14 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
     final connN = ref.read(equipmentConnectionProvider.notifier);
     final phd2 = ref.watch(phd2SettingsProvider);
     final phd2N = ref.read(phd2SettingsProvider.notifier);
+    ref.listen(phd2SettingsProvider, (_, _) => _scheduleSave());
+    final guiderStatus = ref.watch(guiderStatusProvider).asData?.value;
 
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const SettingsSectionHeader('OpenAstro Guider connection'),
+        const SettingsSectionHeader('Connection'),
+        const GuiderConnectionSection(),
         EditableTextRow(
           label: 'Host',
           helpKey: 'eq.guider.host',
@@ -307,13 +353,15 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
             if (v != null) phd2N.setPort(v);
           },
         ),
-        EditableTextRow(
+        SettingsDropdownRow<int>(
+          key: const ValueKey('guider_profile_picker'),
           label: 'Profile',
           helpKey: 'eq.guider.profile',
-          currentValue: phd2.phd2Profile,
-          getCanonical: () => ref.read(phd2SettingsProvider).phd2Profile,
-          parse: phd2N.setPhd2Profile,
-          hint: 'OpenAstro Guider equipment profile, not OpenAstroAra profile',
+          value: phd2.guiderProfileId,
+          items: guiderProfileItems(phd2.guiderProfileId, guiderStatus?.profiles ?? const {}, guiderStatus?.currentProfile),
+          onChanged: (v) {
+            if (v != null) phd2N.setGuiderProfileId(v);
+          },
         ),
         SettingsSwitchRow(
           label: 'Auto-connect on boot',
@@ -385,6 +433,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
           },
         ),
         const SettingsSectionHeader('Calibration'),
+        const GuiderCalibrationSection(),
         SettingsSwitchRow(
           label: 'Force calibration each session',
           helpKey: 'eq.guider.force_calibration_each_session',
@@ -526,8 +575,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
           ),
           const SizedBox(height: 12),
         ],
-        // Save lives in the settings-shell header (PanelSaveRegistration) —
-        // fixed chrome, always visible, no scrolling to find it.
+        // No Save button: every change saves on its own (_scheduleSave).
       ],
     );
   }
@@ -571,8 +619,8 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel>
   }
 
   // §63.17 — equipment pickers fed by GET /equipment/guider/choices, daemon-
-  // side Alpaca discovery, and the on-demand profile push. Save (header) only
-  // persists the profile; "Apply to guider" persists AND pushes.
+  // side Alpaca discovery, and the on-demand profile push. A pick saves to the
+  // profile on its own; "Apply to guider" saves AND pushes.
   List<Widget> _equipmentSection(BuildContext context) {
     final phd2 = ref.watch(phd2SettingsProvider);
     final phd2N = ref.read(phd2SettingsProvider.notifier);
