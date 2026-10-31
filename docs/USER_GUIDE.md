@@ -74,7 +74,7 @@ devices are discovered on the LAN, and the daemon remembers your choices for aut
 If a device drops mid-session, the daemon attempts hot-reconnects and raises a diagnostic; the
 health pill (see §9) turns amber/red until it clears.
 
-### Smart Focus (Setup → Smart Focus)
+### Smart Focus (Checklist → Smart Focus)
 
 The Checklist tab has a **Smart Focus** step between Connect equipment and Polar align.
 
@@ -198,7 +198,7 @@ framing/focus loop when you need to point or focus by eye.
   guiding continues (multi-star takes effect the next time the guider connects). Setting a row back
   to the guider's (or **All guider's**) only stops Ara sending it: the guider keeps whatever value it has,
   including one Ara sent before.
-- **Guiding Assistant.** The Guide camera dialog's assistant button (also under Setup → Smart Focus →
+- **Guiding Assistant.** The Guide camera dialog's assistant button (also under Checklist → Smart Focus →
   Guide camera) runs PHD2's Guiding Assistant from Ara. Loop, pick a star and calibrate once (start
   guiding, or let a run do it), then choose how long to sample (two minutes is plenty) and whether to
   measure Dec backlash, and press **Start**. Guiding is held off while the star drifts; the dialog shows

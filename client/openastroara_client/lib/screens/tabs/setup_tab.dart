@@ -24,7 +24,7 @@ import '../calibration/calibration_screen.dart';
 /// Left: the checklist (Connect equipment → Smart Focus → Polar align →
 /// Calibration frames → Before you sleep), each row with a live readiness glyph. Right: the selected step's
 /// instrument. Gates are checkmarks, not dams — nothing here blocks; the rail
-/// order just reads as the night (Plan → Setup → Run → Live).
+/// order just reads as the night (Planning → Checklist → Sequence → Live).
 class SetupTab extends ConsumerStatefulWidget {
   const SetupTab({super.key});
 
