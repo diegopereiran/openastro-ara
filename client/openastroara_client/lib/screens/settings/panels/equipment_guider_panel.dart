@@ -25,10 +25,11 @@ import '../../../widgets/settings/editable_field.dart';
 import '../../../widgets/settings/settings_row.dart';
 
 /// The guider Profile picker's entries: Automatic first, naming the profile the
-/// guider is on when it reports one, then the guider's own profiles. A pinned
+/// guider is on when nothing is pinned, then the guider's own profiles. A pinned
 /// profile the guider no longer lists (or a guider not connected) stays visible.
 Map<int, String> guiderProfileItems(int pinned, Map<int, String> profiles, String? current) => {
-      0: current == null || current.isEmpty ? 'Automatic' : 'Automatic ($current)',
+      // Name the guider's profile only when Automatic is what put it there.
+      0: pinned != 0 || current == null || current.isEmpty ? 'Automatic' : 'Automatic ($current)',
       ...profiles,
       if (pinned != 0 && !profiles.containsKey(pinned)) pinned: 'Profile #$pinned',
     };
@@ -317,8 +318,14 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
       _equipmentStatus = null;
     });
     _syncDerivedFocalLength();
+    // This save covers any pending auto-save of the same edits.
+    _autoSave?.cancel();
+    final previous = _savedJson;
+    _savedJson = _json();
+    var saved = false;
     try {
       await ref.read(phd2SettingsProvider.notifier).persistToServer(api);
+      saved = true;
       await ref.read(guiderEquipmentProvider.notifier).pushProfile();
       if (!mounted) return;
       messenger.showSnackBar(
@@ -327,6 +334,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
         ),
       );
     } catch (e) {
+      if (!saved) _savedJson = previous;
       if (!mounted) return;
       final msg = friendlyDaemonError(e, fallback: "Couldn't apply to the guider");
       setState(() => _equipmentStatus = msg);

@@ -234,7 +234,10 @@ void main() {
         {0: 'Automatic (Skywatcher 72ED)', 1: 'Default', 4: 'Skywatcher 72ED'});
     expect(guiderProfileItems(0, const {}, null), {0: 'Automatic'});
     expect(guiderProfileItems(9, const {1: 'Default'}, 'Default'),
-        {0: 'Automatic (Default)', 1: 'Default', 9: 'Profile #9'});
+        {0: 'Automatic', 1: 'Default', 9: 'Profile #9'},
+        reason: 'while a profile is pinned, the guider is on the pin, not on what Automatic would pick');
+    expect(guiderProfileItems(4, const {4: 'Skywatcher 72ED'}, 'Skywatcher 72ED'),
+        {0: 'Automatic', 4: 'Skywatcher 72ED'});
   });
 
   testWidgets('a change saves on its own, like the device pages: no Save button, nothing saved on load',
@@ -277,6 +280,22 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(h.profile.lastPut, isNull);
+  });
+
+  testWidgets('Apply to guider is one save: the pending auto-save does not send it again', (tester) async {
+    final h = await _pump(tester,
+        const Phd2Settings(guiderCamera: 'Alpaca Camera [127.0.0.1:6800/0]', guiderMount: 'Alpaca Mount [127.0.0.1:6800/1]', ditherEnabled: true));
+    final toggle = find.descendant(
+        of: find.widgetWithText(SettingsSwitchRow, 'Enable dithering'), matching: find.byType(Switch));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump(); // the auto-save is pending
+    await tester.ensureVisible(find.text('Apply to guider'));
+    await tester.tap(find.text('Apply to guider'));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(h.equipment.calls, contains('push'));
+    expect(h.profile.puts, 1);
   });
 
   testWidgets('a mount on another server than the camera gets a cross-server warning',
