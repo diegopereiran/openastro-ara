@@ -7,22 +7,6 @@ import '../../state/guider/guider_state.dart';
 import '../../theme/ara_colors.dart';
 import 'equipment_state_chip.dart';
 
-/// Human-readable link-state label.
-String guiderConnectionLabel(GuiderConnectionState state) {
-  switch (state) {
-    case GuiderConnectionState.connected:
-      return 'Connected';
-    case GuiderConnectionState.connecting:
-      return 'Connecting…';
-    case GuiderConnectionState.disconnected:
-      return 'Disconnected';
-    case GuiderConnectionState.error:
-      return 'Error';
-    case GuiderConnectionState.unknown:
-      return 'Unknown';
-  }
-}
-
 /// Human-readable runtime-phase label (one wording for every screen, #1364).
 String guiderRuntimeLabel(GuiderRuntimeState state) => guiderRuntimeText(state);
 

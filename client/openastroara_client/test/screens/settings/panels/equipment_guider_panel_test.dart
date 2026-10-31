@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -122,7 +123,7 @@ typedef _Harness = ({
   _FakeAlpacaNames names,
 });
 
-Future<_Harness> _pump(WidgetTester tester, Phd2Settings stored) async {
+Future<_Harness> _pump(WidgetTester tester, Phd2Settings stored, {ValueListenable<bool>? show}) async {
   await tester.binding.setSurfaceSize(const Size(1600, 2400));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final profile = _FakeProfileApi(stored);
@@ -136,7 +137,17 @@ Future<_Harness> _pump(WidgetTester tester, Phd2Settings stored) async {
         guiderEquipmentApiFactoryProvider.overrideWithValue((_) => equipment),
         alpacaDeviceNamesApiProvider.overrideWithValue(names),
       ],
-      child: const MaterialApp(home: Scaffold(body: EquipmentGuiderPanel())),
+      child: MaterialApp(
+        home: Scaffold(
+          body: show == null
+              ? const EquipmentGuiderPanel()
+              // Lets a test take the panel away while the app (and its providers) stay up.
+              : ValueListenableBuilder<bool>(
+                  valueListenable: show,
+                  builder: (_, visible, _) => visible ? const EquipmentGuiderPanel() : const SizedBox(),
+                ),
+        ),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -237,6 +248,30 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(h.profile.lastPut?.ditherEnabled, isFalse);
+  });
+
+  testWidgets('leaving the page right after an edit still saves it', (tester) async {
+    final show = ValueNotifier(true);
+    final h = await _pump(tester, const Phd2Settings(ditherEnabled: true), show: show);
+    final toggle = find.descendant(
+        of: find.widgetWithText(SettingsSwitchRow, 'Enable dithering'), matching: find.byType(Switch));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pump(); // well inside the save delay
+    show.value = false; // the user opens another Settings page
+    await tester.pumpAndSettle();
+    expect(find.byType(EquipmentGuiderPanel), findsNothing);
+    expect(h.profile.lastPut?.ditherEnabled, isFalse);
+  });
+
+  testWidgets('a write that changes nothing (another screen re-loading the settings) saves nothing',
+      (tester) async {
+    final h = await _pump(tester, const Phd2Settings(ditherEnabled: true));
+    final container = ProviderScope.containerOf(tester.element(find.byType(EquipmentGuiderPanel)));
+    container.read(phd2SettingsProvider.notifier).setDitherEnabled(true);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(h.profile.lastPut, isNull);
   });
 
   testWidgets('a mount on another server than the camera gets a cross-server warning',

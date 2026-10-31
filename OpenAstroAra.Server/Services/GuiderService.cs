@@ -191,7 +191,7 @@ public sealed partial class GuiderService : IGuiderService, IDisposable {
                 CalibrationDirection: calibration?.Direction,
                 CalibrationStep: calibration?.Step,
                 CalibrationDistancePx: calibration is { } cal ? Math.Round(cal.Distance, 1) : null,
-                Profiles: _guider.AvailableProfiles.Select(p => new GuiderProfileDto(p.Id, p.Name)).ToList());
+                Profiles: _guider.ProfilesSnapshot.Select(p => new GuiderProfileDto(p.Id, p.Name)).ToList());
             return Task.FromResult<GuiderDto?>(new GuiderDto("PHD2_Single", "PHD2", _state, runtime));
         }
     }

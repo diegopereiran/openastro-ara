@@ -154,12 +154,6 @@ void main() {
   });
 
   group('labels', () {
-    test('connection labels', () {
-      expect(guiderConnectionLabel(GuiderConnectionState.connected), 'Connected');
-      expect(guiderConnectionLabel(GuiderConnectionState.connecting), 'Connecting…');
-      expect(guiderConnectionLabel(GuiderConnectionState.disconnected), 'Disconnected');
-    });
-
     test('runtime labels', () {
       expect(guiderRuntimeLabel(GuiderRuntimeState.guiding), 'Guiding');
       expect(guiderRuntimeLabel(GuiderRuntimeState.starLost), 'Star lost');

@@ -217,12 +217,6 @@ class Phd2SettingsNotifier extends Notifier<Phd2Settings>
     state = state.copyWith(port: v);
   }
 
-  void setPhd2Profile(String s) {
-    final v = s.trim();
-    if (v.isEmpty) return;
-    state = state.copyWith(phd2Profile: v);
-  }
-
   /// The guider profile to select on connect; 0 = Automatic.
   void setGuiderProfileId(int v) {
     if (v < 0) return;

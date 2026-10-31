@@ -1986,10 +1986,10 @@ Use Material 3 `ThemeData` with these tokens. Material's default dark theme is t
 ### 25.3 Top equipment bar
 
 A horizontal `Row` of equipment "chips" — one per device type. Each chip:
-- Icon (Material icon for now)
-- Device-type label below the icon (small caps: "CAM", "FW", "FOC", "MOUNT", "ROT", "GUIDE", "DOME", "SW", "FLAT", "WX", "SAFE")
-- Colored dot indicator (top-right of icon): gray (disconnected), green (connected + idle), amber (busy), red (error)
-- Tap: opens chooser bottom sheet listing discovered Alpaca devices
+- Icon (Material icon; hand-drawn glyphs for Mount — a telescope — and Filter Wheel, which Material lacks)
+- Device name below the icon: "Camera", "Filter Wheel", "Focuser", "Mount", "Rotator", "Guider", "Flat Panel", "Switch", "Weather", "Safety", "Dome". Every chip is the same width so the icons are evenly spaced; below 600 px wide the name is dropped (icon only) and stays as the tooltip
+- Colored dot indicator (top-right of icon): gray (disconnected), green (connected + idle), blinking green (connected and working: exposing, slewing, moving), amber (needs a look), red (error)
+- Tap: opens that device's Settings page (connect + its settings)
 - Long-press / right-click: disconnect, or open device-specific properties panel
 
 Order (left-to-right, mirroring NINA's bar):
@@ -2040,8 +2040,8 @@ Five tabs along the top of the center area:
    - Per-instruction editor pane on the right when selected
    - Top toolbar: New / Load / Save / Validate / Run / Pause / Abort
    - Below toolbar: progress bar + currently-executing instruction label
-4. **Options**
-   - Tree-based settings: Equipment (per device type), Imaging, Plate Solving, Astrometry, File Saving, Telescope, Astronomy, Sequence, Application
+4. **Settings** (opened from a gear in the top bar, not the rail)
+   - Tree-based settings: Imaging, Plate Solving, Astrometry, File Saving, Telescope, Astronomy, Sequence, Application. The per-device Equipment pages are opened from the top-bar chips (§25.3) and ⌘K, not listed in the tree
    - Right pane: settings for selected node
    - "Save Profile" / "Save Profile As..." buttons in the toolbar
 

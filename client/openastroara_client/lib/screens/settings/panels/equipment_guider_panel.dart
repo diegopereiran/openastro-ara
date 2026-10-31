@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import '../../../util/friendly_error.dart';
@@ -56,6 +57,11 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
   bool _syncingDerived = false;
   Timer? _autoSave;
   Future<void> Function()? _pendingFlush;
+  // The settings as last loaded or saved: a write that leaves them unchanged
+  // (another screen re-loading them) is not a change and saves nothing.
+  String? _savedJson;
+
+  String _json() => jsonEncode(ProfileApi.phd2SettingsToJson(ref.read(phd2SettingsProvider)));
 
   // §63.17 guider equipment — transient discovery/apply UI state.
   bool _discovering = false;
@@ -95,6 +101,7 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
       await ref.read(opticsSettingsProvider.notifier).hydrateFromServer(api);
       await ref.read(phd2SettingsProvider.notifier).hydrateFromServer(api);
       _syncDerivedFocalLength();
+      _savedJson = _json();
       _hydrated = true;
       final phd2 = ref.read(phd2SettingsProvider);
       // Choices already loaded before this panel built: ref.listen only
@@ -141,6 +148,10 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
 
   void _scheduleSave() {
     if (!_hydrated || _syncingDerived) return;
+    if (_json() == _savedJson) {
+      _autoSave?.cancel(); // changed back before the save went out
+      return;
+    }
     final api = _api();
     final notifier = ref.read(phd2SettingsProvider.notifier);
     _pendingFlush = api == null ? null : () => notifier.persistToServer(api);
@@ -174,7 +185,9 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
     }
     _syncDerivedFocalLength();
     try {
+      final json = _json();
       await ref.read(phd2SettingsProvider.notifier).persistToServer(api);
+      _savedJson = json;
     } catch (e) {
       if (!mounted) return;
       setState(() => _lastError = friendlyError(e, action: 'save that'));
