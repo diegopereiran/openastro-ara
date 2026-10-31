@@ -184,11 +184,14 @@ class _EquipmentGuiderPanelState extends ConsumerState<EquipmentGuiderPanel> {
       return;
     }
     _syncDerivedFocalLength();
+    // Mark it saved before the PUT: the server's echo replaces the state while
+    // the PUT is in flight, and must read as "already saved", not a new edit.
+    final previous = _savedJson;
+    _savedJson = _json();
     try {
-      final json = _json();
       await ref.read(phd2SettingsProvider.notifier).persistToServer(api);
-      _savedJson = json;
     } catch (e) {
+      _savedJson = previous;
       if (!mounted) return;
       setState(() => _lastError = friendlyError(e, action: 'save that'));
       messenger.showSnackBar(SnackBar(content: Text(_lastError!)));

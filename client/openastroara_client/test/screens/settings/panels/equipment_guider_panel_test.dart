@@ -43,13 +43,16 @@ class _FakeProfileApi extends ProfileApi {
   _FakeProfileApi(this.stored) : super(_server);
   Phd2Settings stored;
   Phd2Settings? lastPut;
+  int puts = 0;
   @override
   Future<Phd2Settings> getPhd2Settings() async => stored;
   @override
   Future<Phd2Settings> putPhd2Settings(Phd2Settings value) async {
     lastPut = value;
+    puts++;
     stored = value;
-    return value;
+    // A new object, like the real API's parsed echo (not the instance sent).
+    return value.copyWith();
   }
 
   @override
@@ -248,6 +251,8 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();
     expect(h.profile.lastPut?.ditherEnabled, isFalse);
+    await tester.pump(const Duration(seconds: 2));
+    expect(h.profile.puts, 1, reason: 'one edit is one save: the server echo must not schedule another');
   });
 
   testWidgets('leaving the page right after an edit still saves it', (tester) async {
