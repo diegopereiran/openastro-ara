@@ -62,10 +62,11 @@ void main() {
     if (hasFonts) await _loadFonts();
   });
 
-  // iPad landscape and portrait at the user's text sizes up to 2x, and a
-  // one-third Split View (or a phone) at the default size.
+  // iPad landscape and portrait at the user's text sizes up to 3.1x (the
+  // largest iOS accessibility size), and a one-third Split View (or a phone)
+  // at the default size.
   final cases = <(double, Size)>[
-    for (final s in [1.0, 1.3, 1.6, 2.0]) ...[(s, const Size(1024, 768)), (s, const Size(768, 1024))],
+    for (final s in [1.0, 1.3, 1.6, 2.0, 2.5, 3.1]) ...[(s, const Size(1024, 768)), (s, const Size(768, 1024))],
     (1.0, const Size(320, 768)),
   ];
   for (final (scale, size) in cases) {
@@ -102,14 +103,22 @@ void main() {
         if (open == 'Plan') {
           await tester.tap(find.byKey(const Key('simple-mode')), warnIfMissed: false);
           await tester.pump();
-          await tester.tap(find.text('Plan').first, warnIfMissed: false);
+          // At large text the grid scrolls; bring Plan into view first.
+          await tester.ensureVisible(find.text('Plan').first);
+          await tester.tap(find.text('Plan').first);
           await tester.pump();
           c.read(planetariumSelectionProvider.notifier).set(const PlanetariumSelection(
               name: 'M31', kind: 'Galaxy', raHours: 0.73, decDeg: 41.4, raJ2000Hours: 0.71, decJ2000Deg: 41.27,
               altDeg: 62, maxAltDeg: 74));
           await tester.pump();
+          // The plan squares never cover the rail's settings chip.
+          final squares = find.byKey(const Key('simple-run-tracker'));
+          if (squares.evaluate().isNotEmpty) {
+            final chip = tester.getRect(find.byKey(const Key('simple-settings')));
+            expect(tester.getRect(squares).overlaps(chip), isFalse, reason: 'the squares cover the settings chip');
+          }
           // Picking Plan opens nothing; the chip opens the sheet.
-          await tester.tap(find.byKey(const Key('simple-settings')), warnIfMissed: false);
+          await tester.tap(find.byKey(const Key('simple-settings')));
           await tester.pump();
           // (The one-third width has no sheet layout yet: phone layout, ALP-4865.)
           if (size.width >= 768) {

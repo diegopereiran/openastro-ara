@@ -392,6 +392,15 @@ class _SimpleShellState extends ConsumerState<SimpleShell> {
     final rightRailTop =
         railTop +
         (height - railTop - kSimpleInset * 2 - stopSize - _rightRailHeight) / 2;
+    // From about 2x text the rail reaches down to the plan squares; they then
+    // move beside the rail instead of over its settings chip.
+    final squaresBesideRail =
+        planSquares &&
+        rightRailTop + _rightRailHeight + kSimpleInset >
+            height -
+                kSimpleInset * 2 -
+                kSimpleBarHeight -
+                kSimplePlanSquareHeight * simpleRailScale(context);
     final popoverMaxHeight = _rightRailHeight == 0
         ? double.infinity
         : height -
@@ -663,8 +672,14 @@ class _SimpleShellState extends ConsumerState<SimpleShell> {
                                     followerAnchor: Alignment.topRight,
                                     offset: const Offset(-kSimpleInset, 0),
                                     child: ConstrainedBox(
+                                      // The room left of the rail: at large
+                                      // text the mode grid folds to one column.
                                       constraints: BoxConstraints(
                                         maxHeight: popoverMaxHeight,
+                                        maxWidth:
+                                            width -
+                                            kSimpleInset * 3 -
+                                            railWidth,
                                       ),
                                       child: SingleChildScrollView(
                                         child: _popover == _Popover.queue
@@ -736,8 +751,19 @@ class _SimpleShellState extends ConsumerState<SimpleShell> {
                               // half (the Info tiles have the left).
                               if (shown == SimpleModeScreen.plan && !runSheet)
                                 Positioned(
-                                  left: width / 2,
-                                  right: kSimpleInset,
+                                  // Room for one square beside the rail even
+                                  // when that passes the middle.
+                                  left: squaresBesideRail
+                                      ? math.min(
+                                          width / 2,
+                                          width -
+                                              kSimpleInset * 3 -
+                                              railWidth * 2,
+                                        )
+                                      : width / 2,
+                                  right: squaresBesideRail
+                                      ? kSimpleInset * 2 + railWidth
+                                      : kSimpleInset,
                                   bottom: kSimpleInset * 2 + kSimpleBarHeight,
                                   child: Align(
                                     alignment: Alignment.bottomRight,
@@ -1049,40 +1075,45 @@ class _LeftRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SimplePanel(
     padding: const EdgeInsets.symmetric(vertical: AraSpace.s8, horizontal: 6),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      spacing: 4,
-      children: [
-        _RailButton(
-          key: const Key('simple-sky'),
-          icon: Icons.public,
-          label: 'Sky',
-          selected: sky,
-          onTap: onSky,
-        ),
-        _RailButton(
-          key: const Key('simple-info'),
-          icon: Icons.info_outline,
-          label: 'Info',
-          selected: info,
-          onTap: onInfo,
-        ),
-        _RailButton(
-          key: const Key('simple-system'),
-          icon: Icons.memory,
-          label: 'System',
-          selected: system,
-          onTap: onSystem,
-        ),
-        _RailButton(
-          key: const Key('simple-library'),
-          icon: Icons.photo_library_outlined,
-          label: 'Library',
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const ImageLibraryScreen()),
+    // From about 2.5x text on a landscape iPad the four no longer fit.
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        spacing: 4,
+        children: [
+          _RailButton(
+            key: const Key('simple-sky'),
+            icon: Icons.public,
+            label: 'Sky',
+            selected: sky,
+            onTap: onSky,
           ),
-        ),
-      ],
+          _RailButton(
+            key: const Key('simple-info'),
+            icon: Icons.info_outline,
+            label: 'Info',
+            selected: info,
+            onTap: onInfo,
+          ),
+          _RailButton(
+            key: const Key('simple-system'),
+            icon: Icons.memory,
+            label: 'System',
+            selected: system,
+            onTap: onSystem,
+          ),
+          _RailButton(
+            key: const Key('simple-library'),
+            icon: Icons.photo_library_outlined,
+            label: 'Library',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const ImageLibraryScreen(),
+              ),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
