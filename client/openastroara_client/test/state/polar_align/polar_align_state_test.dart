@@ -156,9 +156,9 @@ void main() {
       expect(fresh.iteration, 0);
     });
 
-    test('reopening the panel after aligning keeps the Checklist step done', () {
+    test('reopening the panel after aligning keeps the Setup step done', () {
       // The panel resyncs from REST on open; the snapshot carries the error but
-      // no zone, so the green zone (and the Checklist tick) used to vanish.
+      // no zone, so the green zone (and the Setup tick) used to vanish.
       final reopened = liveFromStatus(PolarAlignStatus.fromJson(const {
         'state': 'stopped',
         'current_error_arcmin': 3.2,
