@@ -330,7 +330,7 @@ For a session that outlives the terminal, build once and launch the `.app` detac
 
 ```bash
 flutter build macos --debug
-open build/macos/Build/Products/Debug/openastroara.app
+open "build/macos/Build/Products/Debug/OpenAstro Ara.app"
 ```
 
 **macOS Local Network gotcha:** an app launched with `open` (or from Finder) is its
