@@ -152,6 +152,7 @@
       <span class="word brand">OpenAstro Ara</span>
       <div class="r"><span>This app</span><span>0.0.1a</span></div>
       <div class="r"><span>Ara server</span><span>1.0.0.0</span></div>
+      <div class="r"><span>Guider</span><span>2.1.0</span></div>
       <div class="r"><span>Rig</span><span>Backyard Pi</span></div>
       <div class="r"><span>Profile</span><span>Redcat 51 · ASI533MC</span></div>
     </div>
@@ -179,7 +180,7 @@
 <script>
 const VARIANTS = {
   A: { name: 'Strip mark', why: '<b>A · Strip mark (ASIAir-like).</b> The constellation and "ARA" open the strip, before the device dots. It is always visible, frames included, and costs about 90 px of the strip, which is roughly one device dot on a narrow window. It is quiet in Night mode because the glow sits at the brightness of the text.' },
-  B: { name: 'Mark is the menu', why: '<b>B · The mark is the menu.</b> The glyph alone sits top-left and opens a small Ara sheet: the name, the versions, the rig and its selected profile. The gear stays on the right for Settings (user, 2026-11-05). The mark is a working control, not decoration (DESIGN.md: "Don\'t use colour for … branding flourishes").' },
+  B: { name: 'Mark is the menu', why: '<b>B · The mark is the menu.</b> The glyph alone sits top-left and opens a small Ara sheet: the name, the app, server and guider versions, the rig and its selected profile. The gear stays on the right for Settings (user, 2026-11-05). The mark is a working control, not decoration (DESIGN.md: "Don\'t use colour for … branding flourishes").' },
   C: { name: 'Empty states only', why: '<b>C · Empty states only.</b> Nothing is branded over a frame. The brand shows when nothing else is on screen: "No frame yet" and "No rig connected" (ALP-4858) get a centred card with the mark over tonight\'s sky. This is like a splash screen that is also useful, and the card disappears with the first frame.' },
   D: { name: 'Wallpaper', why: '<b>D · Wallpaper.</b> With no frame, a branded wallpaper (the icon\'s navy and a large constellation, off-centre) replaces the planetarium. This is the wallpaper idea taken literally. It looks the most "product", but it gives up the live sky that Simple Mode shows today ("No frame yet: tonight\'s planetarium"), and in Night mode it is a large lit area at the start of the night.' },
   E: { name: 'Menu mark + Wallpaper', why: '<b>E · B + D, with parallax.</b> B\'s mark opens the Ara sheet, the gear stays, and the wallpaper shows when there is no frame. The wallpaper is in four layers: far stars, mid stars, near stars, then the constellation. They shift by depth as the iPad tilts. On a desktop, move the mouse over the screen to stand in for the tilt. On an iPad or iPhone, Safari only allows motion after a tap on "Enable motion", and only over https. If Reduce Motion is on, the layers stay still.' },
