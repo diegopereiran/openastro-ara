@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simple Mode Branding</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Icons+Outlined&family=Material+Icons">
+<!--
+  PROTOTYPE (throwaway, branch prototype/simple-branding): where does the OpenAstro Ara brand go in Simple Mode?
+  Four structurally different variants on one iPad-sized Simple Mode screen, switchable with ?variant=A..D,
+  the floating bar at the bottom or the ← → keys. Scene and Night mode are switchable too (?scene=, ?night=1).
+  Night mode is the real formula (DESIGN.md: every pixel's luminance folded into the red channel).
+-->
+<style>
+  /* DESIGN.md tokens (lib/theme/ara_colors.dart + ara_metrics.dart) */
+  :root {
+    --bg: #1A1A1A; --border: #404040; --text: #E0E0E0; --text2: #A0A0A0; --link: #64B5F6;
+    --ok: #4CAF50; --busy: #FFB300; --info: #42A5F5; --err: #FF8A80; --sel: #1976D2;
+    --tile: #383838; --sys: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0E0E0E; color: var(--text); font: 14px/1.45 var(--sys); }
+  .page { max-width: 1120px; margin: 0 auto; padding: 32px 16px 110px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+  p.note { color: var(--text2); margin: 0 0 14px; max-width: 92ch; }
+  .tag { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--busy); color: var(--busy); margin-left: 6px; vertical-align: 2px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin: 18px 0 14px; }
+  .lbl { color: var(--text2); font-size: 13px; margin-right: 6px; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; vertical-align: middle; }
+  .seg button { background: transparent; color: var(--text); border: 0; padding: 8px 14px; font: 13px var(--sys); cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--sel); color: #fff; }
+
+  .ipad { width: 1024px; height: 768px; max-width: 100%; position: relative; border-radius: 18px; overflow: hidden; border: 1px solid #333; background: #07080b; }
+  .ipad.night { filter: url(#night); }
+  .scene { position: absolute; inset: 0; }
+  .p { position: absolute; background: rgba(26,26,26,.9); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border-radius: 10px; }
+  .strip { left: 16px; right: 16px; top: 16px; height: 56px; display: flex; align-items: center; gap: 18px; padding: 0 14px; font-size: 13px; color: var(--text2); }
+  .strip .d { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 6px; }
+  .strip .d i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .strip .sp { flex: 1; }
+  .strip .ic { font-size: 22px; color: var(--text); cursor: pointer; }
+  .rail { right: 16px; top: 214px; width: 72px; padding: 8px 6px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .lrail { left: 16px; top: 250px; width: 72px; padding: 8px 6px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .chip { width: 60px; min-height: 52px; border-radius: 8px; background: var(--tile); display: grid; place-items: center; text-align: center; font-size: 12px; line-height: 1.2; padding: 8px; }
+  .chip small { color: var(--text2); display: block; }
+  .shutter { width: 60px; height: 60px; border-radius: 50%; border: 3px solid #fff; display: grid; place-items: center; }
+  .shutter b { width: 46px; height: 46px; border-radius: 50%; background: #fff; }
+  .stop { right: 22px; bottom: 16px; width: 60px; height: 60px; border-radius: 50%; background: #C62828; display: grid; place-items: center; font-size: 11px; font-weight: 700; position: absolute; }
+  .pill { right: 104px; top: 88px; height: 48px; padding: 0 16px; display: flex; align-items: center; gap: 8px; }
+  .pill i { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+  .hint { position: absolute; left: 0; right: 0; top: 50%; text-align: center; color: var(--text2); font-size: 15px; }
+  .label { position: absolute; color: rgba(160,160,160,.55); font-size: 13px; }
+  .proposed { outline: 1.5px dashed var(--busy); outline-offset: 3px; border-radius: 8px; }
+  .hide { display: none !important; }
+
+  /* brand pieces */
+  .mark { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+  .mark svg { display: block; }
+  .word { font-weight: 700; letter-spacing: 2.5px; font-size: 15px; }
+  .word small { font-weight: 400; letter-spacing: .5px; color: var(--text2); font-size: 12px; margin-left: 2px; }
+  .vr { width: 1px; height: 28px; background: var(--border); }
+  .card { left: 50%; top: 50%; transform: translate(-50%, -50%); width: 420px; padding: 28px 24px 20px; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .card .word { font-size: 22px; letter-spacing: 4px; }
+  .card .sub { color: var(--text2); font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; text-align: left; border-top: 1px solid var(--border); }
+  .row .l { flex: 1; } .row b { font-weight: 500; }
+  .btn { min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--sel); color: #fff; font: 600 13px var(--sys); }
+  .sheet { left: 16px; top: 88px; width: 380px; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .sheet .r { display: flex; justify-content: space-between; min-height: 36px; align-items: center; }
+  .sheet .r span:first-child { color: var(--text2); }
+  .wallmark { position: absolute; right: -40px; bottom: -60px; opacity: .9; }
+
+  /* the floating switcher: not part of any design */
+  .switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 9; display: flex; align-items: center; gap: 4px;
+              background: #fff; color: #111; border-radius: 999px; padding: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.5); font: 600 13px var(--sys); }
+  .switcher button { width: 34px; height: 34px; border-radius: 50%; border: 0; background: #111; color: #fff; font-size: 18px; cursor: pointer; }
+  .switcher output { min-width: 300px; text-align: center; padding: 0 10px; }
+  .switcher small { display: block; font-weight: 400; color: #555; font-size: 11px; }
+  .verdict { margin-top: 18px; color: var(--text2); max-width: 92ch; }
+  .verdict b { color: var(--text); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <!-- Night mode: luminance (Rec. 709) into red, green and blue zeroed -->
+  <filter id="night" color-interpolation-filters="sRGB">
+    <feColorMatrix type="matrix" values=".2126 .7152 .0722 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"/>
+  </filter>
+  <linearGradient id="ln" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4FC3F7"/><stop offset="1" stop-color="#7C8CF8"/></linearGradient>
+  <radialGradient id="glow"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset="1" stop-color="#8FA8FF" stop-opacity="0"/></radialGradient>
+  <!-- The app icon's constellation (icon_sources/app_icon_1024.png), traced: 8 stars, the bright one at (514,246) -->
+  <symbol id="ara" viewBox="200 200 630 620">
+    <circle cx="514" cy="246" r="110" fill="url(#glow)"/>
+    <polyline fill="none" stroke="url(#ln)" stroke-width="16" stroke-linejoin="round"
+      points="242,270 514,246 745,412 742,556 782,715 521,777 560,567 557,525 514,246"/>
+    <g fill="#0B0F24" stroke="url(#ln)" stroke-width="14">
+      <circle cx="242" cy="270" r="22"/><circle cx="745" cy="412" r="22"/><circle cx="742" cy="556" r="18"/>
+      <circle cx="782" cy="715" r="22"/><circle cx="521" cy="777" r="22"/><circle cx="560" cy="567" r="18"/><circle cx="557" cy="525" r="14"/>
+    </g>
+    <circle cx="514" cy="246" r="30" fill="#fff"/>
+  </symbol>
+</svg>
+
+<div class="page">
+  <h1>Branding in Simple Mode <span class="tag">prototype</span></h1>
+  <p class="note">Where does the OpenAstro Ara brand go? Each variant puts it somewhere structurally different. The mark is the app icon's constellation, traced. A dashed amber outline marks what's new. Flip variants with the bar at the bottom or ← →, then switch the scene and Night mode: a frame on screen is where a brand costs the most, and the empty screens are where it costs the least.</p>
+
+  <div class="controls">
+    <span><span class="lbl">Scene</span><span class="seg" id="scene">
+      <button data-v="frame">A frame</button><button data-v="empty">No frame yet</button><button data-v="norig">No rig connected</button>
+    </span></span>
+    <span><span class="lbl">Night mode</span><span class="seg" id="night">
+      <button data-v="0">Off</button><button data-v="1">On</button>
+    </span></span>
+  </div>
+
+  <div class="ipad" id="ipad">
+    <canvas class="scene" id="sky" width="1024" height="768"></canvas>
+    <div class="scene" id="labels"></div>
+    <div class="hint" id="hint">Tap the shutter to take a frame</div>
+    <svg class="wallmark hide" id="wallmark" width="560" height="560"><use href="#ara"/></svg>
+
+    <div class="p strip">
+      <span class="mark hide proposed" id="stripMark"><svg width="30" height="30"><use href="#ara"/></svg><span class="word">ARA</span></span>
+      <span class="mark hide proposed" id="stripButton" title="Settings"><svg width="34" height="34"><use href="#ara"/></svg></span>
+      <span class="vr hide" id="stripVr"></span>
+      <span class="d"><i></i>Main Camera</span><span class="d"><i></i>Mount</span><span class="d"><i></i>Focuser</span><span class="d"><i></i>Guide Camera</span>
+      <span class="sp"></span>
+      <i class="material-icons-outlined ic">search</i><i class="material-icons-outlined ic">dark_mode</i>
+      <i class="material-icons-outlined ic" id="gear">settings</i>
+    </div>
+    <div class="p pill" id="pill"><i></i>Frame ready · 120 s</div>
+    <div class="p lrail"><div class="chip"><span class="material-icons-outlined">public</span></div><div class="chip"><span class="material-icons-outlined">info</span></div><div class="chip"><span class="material-icons-outlined">photo_library</span></div></div>
+    <div class="p rail">
+      <div class="chip">Preview<small>120 s</small></div><div class="shutter"><b></b></div><div class="chip">Guide<small>0.62″</small></div>
+    </div>
+    <div class="stop">STOP</div>
+
+    <div class="p sheet hide proposed" id="sheet">
+      <span class="mark"><svg width="40" height="40"><use href="#ara"/></svg><span class="word">OPENASTRO ARA</span></span>
+      <div class="r"><span>This app</span><span>0.0.1a</span></div>
+      <div class="r"><span>Ara server</span><span>1.0.0.0</span></div>
+      <div class="r"><span>Rig</span><span>Backyard Pi</span></div>
+      <div class="r"><span>Settings</span><span class="material-icons-outlined">chevron_right</span></div>
+    </div>
+
+    <div class="p card hide proposed" id="card">
+      <svg width="120" height="120"><use href="#ara"/></svg>
+      <span class="word">OPENASTRO ARA</span>
+      <span class="sub" id="cardSub">Tap the shutter to take a frame</span>
+      <div id="rigs" class="hide" style="width:100%">
+        <div class="row"><span class="l"><b>Backyard Pi</b><br><span class="sub">192.0.2.10 · Ara 1.0.0</span></span><button class="btn">Connect</button></div>
+        <div class="row"><span class="l" style="color:var(--link)">Add a rig by address</span></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="verdict" id="verdict"></p>
+</div>
+
+<div class="switcher" role="group" aria-label="Prototype variant">
+  <button id="prev" aria-label="Previous variant">‹</button>
+  <output id="cur"></output>
+  <button id="next" aria-label="Next variant">›</button>
+</div>
+
+<script>
+const VARIANTS = {
+  A: { name: 'Strip mark', why: '<b>A · Strip mark (ASIAir-like).</b> The constellation and "ARA" open the strip, before the device dots. It is always visible, frames included, and costs about 90 px of the strip, which is roughly one device dot on a narrow window. It is quiet in Night mode because the glow sits at the brightness of the text.' },
+  B: { name: 'Mark is the menu', why: '<b>B · The mark is the menu.</b> The glyph alone sits top-left and opens a small Ara sheet: the name, versions, the rig, then Settings. The gear goes away, so the strip gains a slot instead of losing one. It is a real control, not decoration (DESIGN.md: "Don\'t use colour for … branding flourishes"). The risk is that a logo is a less obvious way into Settings than a gear.' },
+  C: { name: 'Empty states only', why: '<b>C · Empty states only.</b> Nothing is branded over a frame. The brand shows when nothing else is on screen: "No frame yet" and "No rig connected" (ALP-4858) get a centred card with the mark over tonight\'s sky. This is like a splash screen that is also useful, and the card disappears with the first frame.' },
+  D: { name: 'Wallpaper', why: '<b>D · Wallpaper.</b> With no frame, a branded wallpaper (the icon\'s navy and a large constellation, off-centre) replaces the planetarium. This is the wallpaper idea taken literally. It looks the most "product", but it gives up the live sky that Simple Mode shows today ("No frame yet: tonight\'s planetarium"), and in Night mode it is a large lit area at the start of the night.' },
+};
+const keys = Object.keys(VARIANTS);
+const q = new URLSearchParams(location.search);
+let state = { variant: keys.includes(q.get('variant')) ? q.get('variant') : 'A', scene: q.get('scene') || 'frame', night: q.get('night') === '1' ? '1' : '0' };
+
+// Fixed-seed sky so every reload looks the same.
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const STARS = Array.from({ length: 420 }, () => [rnd() * 1024, rnd() * 768, rnd() ** 4 * 1.8 + .3, rnd()]);
+function paint() {
+  const c = document.getElementById('sky').getContext('2d');
+  c.clearRect(0, 0, 1024, 768);
+  const wall = state.variant === 'D' && state.scene !== 'frame';
+  let g;
+  if (state.scene === 'frame') {           // a stretched frame: a nebula and stars
+    c.fillStyle = '#0a0a0c'; c.fillRect(0, 0, 1024, 768);
+    g = c.createRadialGradient(560, 380, 10, 560, 380, 360); g.addColorStop(0, 'rgba(200,90,110,.55)'); g.addColorStop(.5, 'rgba(90,60,120,.25)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.fillRect(0, 0, 1024, 768);
+  } else if (wall) {                        // the icon's navy
+    g = c.createLinearGradient(0, 0, 0, 768); g.addColorStop(0, '#272c4d'); g.addColorStop(.45, '#171b3b'); g.addColorStop(1, '#070914');
+    c.fillStyle = g; c.fillRect(0, 0, 1024, 768);
+  } else {                                  // tonight's planetarium
+    g = c.createLinearGradient(0, 0, 0, 768); g.addColorStop(0, '#05070d'); g.addColorStop(1, '#0d1220');
+    c.fillStyle = g; c.fillRect(0, 0, 1024, 768);
+  }
+  for (const [x, y, r, a] of STARS) {
+    if (wall && a < .7) continue;
+    c.globalAlpha = state.scene === 'frame' ? .5 + a / 2 : .35 + a / 2;
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(x, y, wall ? r * .6 : r, 0, 7); c.fill();
+  }
+  c.globalAlpha = 1;
+  document.getElementById('labels').innerHTML = state.scene === 'frame' || wall ? '' :
+    [['Pleiades', 560, 330], ['Uranus', 690, 342], ['Aldebaran', 840, 342], ['NGC 1499', 470, 585], ['M 31', 210, 470]]
+      .map(([t, x, y]) => `<span class="label" style="left:${x}px;top:${y}px">${t}</span>`).join('');
+}
+
+function render() {
+  const v = state.variant, s = state.scene, $ = id => document.getElementById(id);
+  const show = (id, on) => $(id).classList.toggle('hide', !on);
+  show('stripMark', v === 'A'); show('stripVr', v === 'A');
+  show('stripButton', v === 'B'); show('gear', v !== 'B'); show('sheet', v === 'B' && sheetOpen);
+  show('card', v === 'C' && s !== 'frame'); show('rigs', s === 'norig');
+  $('cardSub').textContent = s === 'norig' ? 'Connect to a rig on your network' : 'Tap the shutter to take a frame';
+  show('wallmark', v === 'D' && s !== 'frame');
+  show('hint', s === 'empty' && v !== 'C');
+  $('hint').textContent = 'Tap the shutter to take a frame';
+  show('pill', s === 'frame');
+  $('ipad').classList.toggle('night', state.night === '1');
+  for (const [id, val] of [['scene', s], ['night', state.night]])
+    for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute('aria-pressed', b.dataset.v === val);
+  $('cur').innerHTML = `${v} (${VARIANTS[v].name})<small>scene: ${s} · night: ${state.night === '1' ? 'on' : 'off'}${v === 'B' ? ' · tap the mark' : ''}</small>`;
+  $('verdict').innerHTML = VARIANTS[v].why;
+  paint();
+  const p = new URLSearchParams({ variant: v, scene: s }); if (state.night === '1') p.set('night', '1');
+  history.replaceState(null, '', '?' + p);
+}
+
+let sheetOpen = false;
+document.getElementById('stripButton').onclick = () => { sheetOpen = !sheetOpen; render(); };
+const step = d => { state.variant = keys[(keys.indexOf(state.variant) + d + keys.length) % keys.length]; sheetOpen = false; render(); };
+document.getElementById('prev').onclick = () => step(-1);
+document.getElementById('next').onclick = () => step(1);
+addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') step(-1); else if (e.key === 'ArrowRight') step(1);
+});
+for (const id of ['scene', 'night'])
+  document.getElementById(id).onclick = e => { if (e.target.dataset.v) { state[id] = e.target.dataset.v; render(); } };
+render();
+</script>
+</body>
+</html>
