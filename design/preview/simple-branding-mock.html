@@ -58,6 +58,7 @@
   .mark { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
   .mark svg { display: block; }
   .word { font-weight: 700; letter-spacing: 2.5px; font-size: 15px; }
+  .word.brand, .card .word.brand { letter-spacing: .3px; }
   .word small { font-weight: 400; letter-spacing: .5px; color: var(--text2); font-size: 12px; margin-left: 2px; }
   .vr { width: 1px; height: 28px; background: var(--border); }
   .card { left: 50%; top: 50%; transform: translate(-50%, -50%); width: 420px; padding: 28px 24px 20px; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
@@ -148,7 +149,7 @@
     <div class="stop">STOP</div>
 
     <div class="p sheet hide proposed" id="sheet">
-      <span class="mark"><svg width="40" height="40"><use href="#ara"/></svg><span class="word">OPENASTRO ARA</span></span>
+      <span class="mark"><svg width="40" height="40"><use href="#ara"/></svg><span class="word brand">OpenAstro Ara</span></span>
       <div class="r"><span>This app</span><span>0.0.1a</span></div>
       <div class="r"><span>Ara server</span><span>1.0.0.0</span></div>
       <div class="r"><span>Rig</span><span>Backyard Pi</span></div>
@@ -157,7 +158,7 @@
 
     <div class="p card hide proposed" id="card">
       <svg width="120" height="120"><use href="#ara"/></svg>
-      <span class="word">OPENASTRO ARA</span>
+      <span class="word brand">OpenAstro Ara</span>
       <span class="sub" id="cardSub">Tap the shutter to take a frame</span>
       <div id="rigs" class="hide" style="width:100%">
         <div class="row"><span class="l"><b>Backyard Pi</b><br><span class="sub">192.0.2.10 · Ara 1.0.0</span></span><button class="btn">Connect</button></div>
