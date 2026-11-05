@@ -70,6 +70,10 @@
   .sheet .r { display: flex; justify-content: space-between; min-height: 36px; align-items: center; }
   .sheet .r span:first-child { color: var(--text2); }
   .wallmark { position: absolute; right: -40px; bottom: -60px; opacity: .9; }
+  .layer { position: absolute; left: -40px; top: -40px; will-change: transform; }
+  svg.layer { left: auto; top: auto; }
+  .motion { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); min-height: 40px; padding: 0 16px; border: 1px dashed var(--busy);
+            border-radius: 10px; background: rgba(26,26,26,.9); color: var(--text); font: 13px var(--sys); cursor: pointer; }
 
   /* the floating switcher: not part of any design */
   .switcher { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 9; display: flex; align-items: center; gap: 4px;
@@ -119,7 +123,13 @@
     <canvas class="scene" id="sky" width="1024" height="768"></canvas>
     <div class="scene" id="labels"></div>
     <div class="hint" id="hint">Tap the shutter to take a frame</div>
-    <svg class="wallmark hide" id="wallmark" width="560" height="560"><use href="#ara"/></svg>
+    <div class="scene hide" id="par">
+      <canvas class="layer" data-depth="6" width="1104" height="848"></canvas>
+      <canvas class="layer" data-depth="14" width="1104" height="848"></canvas>
+      <canvas class="layer" data-depth="26" width="1104" height="848"></canvas>
+      <svg class="wallmark layer" data-depth="40" width="560" height="560"><use href="#ara"/></svg>
+    </div>
+    <button class="motion hide" id="motion">Enable motion (tilt the iPad)</button>
 
     <div class="p strip">
       <span class="mark hide proposed" id="stripMark"><svg width="30" height="30"><use href="#ara"/></svg><span class="word">ARA</span></span>
@@ -142,7 +152,6 @@
       <div class="r"><span>This app</span><span>0.0.1a</span></div>
       <div class="r"><span>Ara server</span><span>1.0.0.0</span></div>
       <div class="r"><span>Rig</span><span>Backyard Pi</span></div>
-      <div class="r"><span>Settings</span><span class="material-icons-outlined">chevron_right</span></div>
     </div>
 
     <div class="p card hide proposed" id="card">
@@ -168,9 +177,10 @@
 <script>
 const VARIANTS = {
   A: { name: 'Strip mark', why: '<b>A · Strip mark (ASIAir-like).</b> The constellation and "ARA" open the strip, before the device dots. It is always visible, frames included, and costs about 90 px of the strip, which is roughly one device dot on a narrow window. It is quiet in Night mode because the glow sits at the brightness of the text.' },
-  B: { name: 'Mark is the menu', why: '<b>B · The mark is the menu.</b> The glyph alone sits top-left and opens a small Ara sheet: the name, versions, the rig, then Settings. The gear goes away, so the strip gains a slot instead of losing one. It is a real control, not decoration (DESIGN.md: "Don\'t use colour for … branding flourishes"). The risk is that a logo is a less obvious way into Settings than a gear.' },
+  B: { name: 'Mark is the menu', why: '<b>B · The mark is the menu.</b> The glyph alone sits top-left and opens a small Ara sheet: the name, the versions and the rig. The gear stays on the right for Settings (user, 2026-11-05). The mark is a working control, not decoration (DESIGN.md: "Don\'t use colour for … branding flourishes").' },
   C: { name: 'Empty states only', why: '<b>C · Empty states only.</b> Nothing is branded over a frame. The brand shows when nothing else is on screen: "No frame yet" and "No rig connected" (ALP-4858) get a centred card with the mark over tonight\'s sky. This is like a splash screen that is also useful, and the card disappears with the first frame.' },
   D: { name: 'Wallpaper', why: '<b>D · Wallpaper.</b> With no frame, a branded wallpaper (the icon\'s navy and a large constellation, off-centre) replaces the planetarium. This is the wallpaper idea taken literally. It looks the most "product", but it gives up the live sky that Simple Mode shows today ("No frame yet: tonight\'s planetarium"), and in Night mode it is a large lit area at the start of the night.' },
+  E: { name: 'Menu mark + Wallpaper', why: '<b>E · B + D, with parallax.</b> B\'s mark opens the Ara sheet, the gear stays, and the wallpaper shows when there is no frame. The wallpaper is in four layers: far stars, mid stars, near stars, then the constellation. They shift by depth as the iPad tilts. On a desktop, move the mouse over the screen to stand in for the tilt. On an iPad or iPhone, Safari only allows motion after a tap on "Enable motion", and only over https. If Reduce Motion is on, the layers stay still.' },
 };
 const keys = Object.keys(VARIANTS);
 const q = new URLSearchParams(location.search);
@@ -182,7 +192,7 @@ const STARS = Array.from({ length: 420 }, () => [rnd() * 1024, rnd() * 768, rnd(
 function paint() {
   const c = document.getElementById('sky').getContext('2d');
   c.clearRect(0, 0, 1024, 768);
-  const wall = state.variant === 'D' && state.scene !== 'frame';
+  const wall = (state.variant === 'D' || state.variant === 'E') && state.scene !== 'frame';
   let g;
   if (state.scene === 'frame') {           // a stretched frame: a nebula and stars
     c.fillStyle = '#0a0a0c'; c.fillRect(0, 0, 1024, 768);
@@ -195,8 +205,9 @@ function paint() {
     g = c.createLinearGradient(0, 0, 0, 768); g.addColorStop(0, '#05070d'); g.addColorStop(1, '#0d1220');
     c.fillStyle = g; c.fillRect(0, 0, 1024, 768);
   }
+  if (wall) paintLayers();
   for (const [x, y, r, a] of STARS) {
-    if (wall && a < .7) continue;
+    if (wall) break;
     c.globalAlpha = state.scene === 'frame' ? .5 + a / 2 : .35 + a / 2;
     c.fillStyle = '#fff'; c.beginPath(); c.arc(x, y, wall ? r * .6 : r, 0, 7); c.fill();
   }
@@ -206,21 +217,65 @@ function paint() {
       .map(([t, x, y]) => `<span class="label" style="left:${x}px;top:${y}px">${t}</span>`).join('');
 }
 
+// Wallpaper stars split into three depths; each layer is 80 px larger than the screen so it can shift.
+let layersPainted = false;
+function paintLayers() {
+  if (layersPainted) return; layersPainted = true;
+  document.querySelectorAll('#par canvas').forEach((cv, i) => {
+    const c = cv.getContext('2d'); c.fillStyle = '#fff';
+    for (let n = 0; n < [260, 90, 28][i]; n++) {
+      c.globalAlpha = [.35, .6, .9][i] * (.6 + rnd() * .4);
+      c.beginPath(); c.arc(rnd() * 1104, rnd() * 848, [.5, .9, 1.6][i] * (.7 + rnd() * .6), 0, 7); c.fill();
+    }
+  });
+}
+
+// Parallax: a tilt of up to ±20° maps to -1..1 on each axis; each layer moves by its depth in px.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const needsPermission = typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function';
+let motionOn = false, tx = 0, ty = 0, cx = 0, cy = 0, base = null;
+function shift(x, y) { tx = Math.max(-1, Math.min(1, x)); ty = Math.max(-1, Math.min(1, y)); }
+function tick() {
+  cx += (tx - cx) * .12; cy += (ty - cy) * .12;   // ease, so sensor jitter doesn't shimmer
+  if (!reduce) document.querySelectorAll('#par .layer').forEach(l => {
+    const d = +l.dataset.depth; l.style.transform = `translate(${-cx * d}px, ${-cy * d}px)`;
+  });
+  requestAnimationFrame(tick);
+}
+function onTilt(e) {
+  if (e.beta == null) return;
+  motionOn = true;
+  base ??= [e.beta, e.gamma];                        // the pose when motion started is "centre"
+  shift((e.gamma - base[1]) / 20, (e.beta - base[0]) / 20);
+}
+if (!needsPermission) addEventListener('deviceorientation', onTilt);
+document.getElementById('motion').onclick = async () => {
+  try { if (await DeviceOrientationEvent.requestPermission() === 'granted') addEventListener('deviceorientation', onTilt); } catch {}
+  render();
+};
+document.getElementById('ipad').addEventListener('mousemove', e => {
+  if (motionOn) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  shift(((e.clientX - r.left) / r.width - .5) * 2, ((e.clientY - r.top) / r.height - .5) * 2);
+});
+requestAnimationFrame(tick);
+
 function render() {
   const v = state.variant, s = state.scene, $ = id => document.getElementById(id);
   const show = (id, on) => $(id).classList.toggle('hide', !on);
   show('stripMark', v === 'A'); show('stripVr', v === 'A');
-  show('stripButton', v === 'B'); show('gear', v !== 'B'); show('sheet', v === 'B' && sheetOpen);
+  const menu = v === 'B' || v === 'E', wallOn = (v === 'D' || v === 'E') && s !== 'frame';
+  show('stripButton', menu); show('sheet', menu && sheetOpen);
   show('card', v === 'C' && s !== 'frame'); show('rigs', s === 'norig');
   $('cardSub').textContent = s === 'norig' ? 'Connect to a rig on your network' : 'Tap the shutter to take a frame';
-  show('wallmark', v === 'D' && s !== 'frame');
+  show('par', wallOn); show('motion', v === 'E' && wallOn && needsPermission && !motionOn);
   show('hint', s === 'empty' && v !== 'C');
   $('hint').textContent = 'Tap the shutter to take a frame';
   show('pill', s === 'frame');
   $('ipad').classList.toggle('night', state.night === '1');
   for (const [id, val] of [['scene', s], ['night', state.night]])
     for (const b of document.querySelectorAll(`#${id} button`)) b.setAttribute('aria-pressed', b.dataset.v === val);
-  $('cur').innerHTML = `${v} (${VARIANTS[v].name})<small>scene: ${s} · night: ${state.night === '1' ? 'on' : 'off'}${v === 'B' ? ' · tap the mark' : ''}</small>`;
+  $('cur').innerHTML = `${v} (${VARIANTS[v].name})<small>scene: ${s} · night: ${state.night === '1' ? 'on' : 'off'}${menu ? ' · tap the mark' : ''}${v === 'E' && wallOn ? ' · tilt: ' + (motionOn ? 'device' : 'mouse') : ''}</small>`;
   $('verdict').innerHTML = VARIANTS[v].why;
   paint();
   const p = new URLSearchParams({ variant: v, scene: s }); if (state.night === '1') p.set('night', '1');
