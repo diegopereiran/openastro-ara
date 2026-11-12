@@ -222,6 +222,16 @@ void main() {
     await slot2UnderTheMark(_wire(runtime: 'moving', current: -1, extra: 5), '8 slots while its slot is unknown: held');
   });
 
+  testWidgets('a wheel opened mid-move turns to the slot it lands on', (tester) async {
+    final (_, wheel) = await _pump(tester, _wire(runtime: 'moving', current: -1, extra: 1));
+    final mark = find.byType(SimpleFilterWheel);
+    wheel.set(_wire(current: 3, extra: 1));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.getCenter(_slot(3)).dx, moreOrLessEquals(tester.getRect(mark).center.dx, epsilon: 1));
+    expect(tester.getCenter(_slot(3)).dy, lessThan(tester.getRect(mark).center.dy), reason: 'under the mark at the top');
+  });
+
   testWidgets('a keyboard user tabs to a cell and picks it with Enter or Space', (tester) async {
     final (_, wheel) = await _pump(tester, _wire());
     // Reading order; the cell in place takes no focus, so slot 2 (lower left) is first.
