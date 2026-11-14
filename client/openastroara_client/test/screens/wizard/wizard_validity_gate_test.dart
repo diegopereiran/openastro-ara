@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openastroara/l10n/l10n.dart';
 import 'package:openastroara/screens/wizard/wizard_shell.dart';
 import 'package:openastroara/state/wizard_state.dart';
 
@@ -54,5 +55,23 @@ void main() {
     container.read(wizardStepValidProvider.notifier).setValid(true);
     await tester.pump();
     expect(nextButton().onPressed, isNotNull, reason: 're-enabled when fixed');
+  });
+
+  testWidgets('the wizard shell is in Brazilian Portuguese', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(
+        locale: Locale('pt', 'BR'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: WizardShell(),
+      ),
+    ));
+    await tester.pump();
+    expect(find.text('Avançar'), findsOneWidget);
+    expect(find.text('Salvar e sair'), findsOneWidget);
+    expect(find.text('Next'), findsNothing);
   });
 }

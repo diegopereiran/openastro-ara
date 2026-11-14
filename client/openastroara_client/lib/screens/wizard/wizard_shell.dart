@@ -71,16 +71,16 @@ class _WizardShellState extends ConsumerState<WizardShell> {
     final stepValid = ref.watch(wizardStepValidProvider);
     final info = ProfileWizard.steps[state.step]!;
     final body = wizardScreenBuilders[state.step]?.call(context) ??
-        Center(child: Text('Missing screen builder for step ${state.step}'));
+        Center(child: Text(context.l10n.wizardMissingScreen(state.step)));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Set up profile · Step ${state.step} of ${ProfileWizard.totalSteps}'),
+        title: Text(context.l10n.wizardTitle(state.step, ProfileWizard.totalSteps)),
         actions: [
           TextButton.icon(
             onPressed: () => _saveAndExit(controller),
             icon: const Icon(Icons.logout, size: 18),
-            label: const Text('Save & Exit'),
+            label: Text(context.l10n.wizardSaveExit),
           ),
           const SizedBox(width: 8),
         ],
@@ -326,7 +326,7 @@ class _WizardShellState extends ConsumerState<WizardShell> {
     // guider push, darks) — tell the user which, with where to finish them.
     if (finishNotes.isNotEmpty) {
       messenger.showSnackBar(SnackBar(
-        content: Text('Profile saved. ${finishNotes.join(' ')}'),
+        content: Text(l.wizardSavedWithNotes(finishNotes.join(' '))),
         duration: const Duration(seconds: 8),
       ));
     }
@@ -363,6 +363,7 @@ class _WizardShellState extends ConsumerState<WizardShell> {
     required NavigatorState nav,
     required ScaffoldMessengerState messenger,
   }) async {
+    final l = context.l10n;
     final name = (draft.profileName?.trim().isNotEmpty ?? false)
         ? draft.profileName!.trim()
         : 'Untitled profile';
@@ -385,8 +386,7 @@ class _WizardShellState extends ConsumerState<WizardShell> {
     }
     if (nav.mounted) nav.pop(); // exit the wizard
     messenger.showSnackBar(SnackBar(
-      content: Text('"$name" is saved on this device. It will be applied to your rig '
-          'the next time you connect.'),
+      content: Text(l.wizardSavedLocally(name)),
       duration: const Duration(seconds: 6),
     ));
     widget.onComplete?.call(ProfileDraftSnapshot(draft));
@@ -439,7 +439,7 @@ class _BottomNavBar extends StatelessWidget {
     final nextButton = FilledButton.icon(
       onPressed: canAdvance ? onNext : null,
       icon: Icon(isLast ? Icons.check : Icons.chevron_right),
-      label: Text(isLast ? 'Save Profile' : 'Next'),
+      label: Text(isLast ? context.l10n.wizardSaveProfile : context.l10n.wizardNext),
     );
     return Container(
       decoration: const BoxDecoration(
@@ -452,21 +452,21 @@ class _BottomNavBar extends StatelessWidget {
           TextButton.icon(
             onPressed: onBack,
             icon: const Icon(Icons.chevron_left),
-            label: const Text('Back'),
+            label: Text(context.l10n.wizardBack),
           ),
           const SizedBox(width: 8),
           // Gated like Next (see canAdvance) — a skippable gate is no gate.
           if (canAdvance)
             TextButton(
               onPressed: onSkip,
-              child: const Text('Skip — use defaults'),
+              child: Text(context.l10n.wizardSkipDefaults),
             )
           else
             Tooltip(
-              message: 'Resolve the issue on this screen to continue.',
-              child: const TextButton(
+              message: context.l10n.wizardSkipBlocked,
+              child: TextButton(
                 onPressed: null,
-                child: Text('Skip — use defaults'),
+                child: Text(context.l10n.wizardSkipDefaults),
               ),
             ),
           const Spacer(),
@@ -481,7 +481,7 @@ class _BottomNavBar extends StatelessWidget {
             nextButton
           else
             Tooltip(
-              message: 'Fix the highlighted field to continue.',
+              message: context.l10n.wizardNextBlocked,
               child: nextButton,
             ),
         ],
@@ -521,7 +521,7 @@ class WizardDoneView extends ConsumerWidget {
       progressLine = 'Building dark library…';
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile saved')),
+      appBar: AppBar(title: Text(context.l10n.wizardDoneTitle)),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 560),
@@ -534,13 +534,11 @@ class WizardDoneView extends ConsumerWidget {
                 const Icon(Icons.check_circle,
                     size: 44, color: AraColors.accentConnected),
                 const SizedBox(height: 12),
-                Text('You\'re all set',
+                Text(context.l10n.wizardDoneHeading,
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 8),
                 Text(
-                  'Your profile is saved and active. The dark library is '
-                  'shooting in the background — it finishes on the server '
-                  'even if you leave now.',
+                  context.l10n.wizardDoneBody,
                   style: Theme.of(context)
                       .textTheme
                       .bodyMedium
@@ -588,7 +586,7 @@ class WizardDoneView extends ConsumerWidget {
                   child: FilledButton.icon(
                     onPressed: onFinish,
                     icon: const Icon(Icons.check),
-                    label: const Text('Finish'),
+                    label: Text(context.l10n.wizardDoneFinish),
                   ),
                 ),
               ],
