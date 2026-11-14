@@ -439,10 +439,14 @@ class _BottomNavBar extends StatelessWidget {
     final nextButton = FilledButton.icon(
       onPressed: canAdvance ? onNext : null,
       icon: Icon(isLast ? Icons.check : Icons.chevron_right),
-      label: Text(isLast ? context.l10n.wizardSaveProfile : context.l10n.wizardNext),
+      label: Text(
+        isLast ? context.l10n.wizardSaveProfile : context.l10n.wizardNext,
+      ),
     );
-    final skipText = Text(context.l10n.wizardSkipDefaults,
-        overflow: TextOverflow.ellipsis);
+    final skipText = Text(
+      context.l10n.wizardSkipDefaults,
+      overflow: TextOverflow.ellipsis,
+    );
     return Container(
       decoration: const BoxDecoration(
         color: AraColors.bgPanel,
@@ -458,40 +462,35 @@ class _BottomNavBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           // Gated like Next (see canAdvance) — a skippable gate is no gate.
-          // Flexible + ellipsis: on a 390 px phone Skip and the stage label
-          // shrink so Next stays on screen (it overflowed before).
-          Flexible(
-            child: canAdvance
-                ? TextButton(
-                    onPressed: onSkip,
-                    child: skipText,
-                  )
-                : Tooltip(
-                    message: context.l10n.wizardSkipBlocked,
-                    child: TextButton(
-                      onPressed: null,
-                      child: skipText,
+          // Expanded (tight) takes all free space, so Next stays on the right
+          // edge; Skip ellipsizes only when the footer is really narrow.
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: canAdvance
+                  ? TextButton(onPressed: onSkip, child: skipText)
+                  : Tooltip(
+                      message: context.l10n.wizardSkipBlocked,
+                      child: TextButton(onPressed: null, child: skipText),
                     ),
-                  ),
+            ),
           ),
-          const Spacer(),
-          Flexible(
-            child: Text(stageLabel,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AraColors.textSecondary,
-                    )),
-          ),
-          const SizedBox(width: 16),
+          // A phone already shows the stage above the form and the step in
+          // the app bar; the footer label would squeeze Skip off the row.
+          if (MediaQuery.sizeOf(context).width >= 600) ...[
+            Text(
+              stageLabel,
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: AraColors.textSecondary),
+            ),
+            const SizedBox(width: 16),
+          ],
           // Only wrap in a Tooltip when disabled — an empty-message Tooltip on the
           // enabled button can flash a blank popup on hover on some platforms.
           if (canAdvance)
             nextButton
           else
-            Tooltip(
-              message: context.l10n.wizardNextBlocked,
-              child: nextButton,
-            ),
+            Tooltip(message: context.l10n.wizardNextBlocked, child: nextButton),
         ],
       ),
     );
