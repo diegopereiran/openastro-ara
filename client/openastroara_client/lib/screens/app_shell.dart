@@ -15,7 +15,9 @@ import '../widgets/command_palette.dart';
 import '../widgets/emergency_stop_button.dart';
 import 'shell_listeners.dart';
 import '../widgets/equipment/equipment_status_chip.dart';
+
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+
 import '../services/notch_side.dart';
 import '../widgets/equipment_chip.dart'
     show EquipmentChipCompact, kEquipmentChipCompactWidth, kEquipmentChipWidth;
@@ -498,7 +500,11 @@ final _launchers = <_Launcher>[
     Icons.insights,
     (c, _) => _push(c, const StatsDashboardScreen()),
   ),
-  _Launcher((l) => l.appShellLauncherLaunchpad, Icons.rocket_launch_outlined, backToLaunchpad),
+  _Launcher(
+    (l) => l.appShellLauncherLaunchpad,
+    Icons.rocket_launch_outlined,
+    backToLaunchpad,
+  ),
   _Launcher(
     (l) => l.appShellLauncherWizard,
     Icons.tune,

@@ -441,6 +441,8 @@ class _BottomNavBar extends StatelessWidget {
       icon: Icon(isLast ? Icons.check : Icons.chevron_right),
       label: Text(isLast ? context.l10n.wizardSaveProfile : context.l10n.wizardNext),
     );
+    final skipText = Text(context.l10n.wizardSkipDefaults,
+        overflow: TextOverflow.ellipsis);
     return Container(
       decoration: const BoxDecoration(
         color: AraColors.bgPanel,
@@ -456,24 +458,30 @@ class _BottomNavBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           // Gated like Next (see canAdvance) — a skippable gate is no gate.
-          if (canAdvance)
-            TextButton(
-              onPressed: onSkip,
-              child: Text(context.l10n.wizardSkipDefaults),
-            )
-          else
-            Tooltip(
-              message: context.l10n.wizardSkipBlocked,
-              child: TextButton(
-                onPressed: null,
-                child: Text(context.l10n.wizardSkipDefaults),
-              ),
-            ),
+          // Flexible + ellipsis: on a 390 px phone Skip and the stage label
+          // shrink so Next stays on screen (it overflowed before).
+          Flexible(
+            child: canAdvance
+                ? TextButton(
+                    onPressed: onSkip,
+                    child: skipText,
+                  )
+                : Tooltip(
+                    message: context.l10n.wizardSkipBlocked,
+                    child: TextButton(
+                      onPressed: null,
+                      child: skipText,
+                    ),
+                  ),
+          ),
           const Spacer(),
-          Text(stageLabel,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AraColors.textSecondary,
-                  )),
+          Flexible(
+            child: Text(stageLabel,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AraColors.textSecondary,
+                    )),
+          ),
           const SizedBox(width: 16),
           // Only wrap in a Tooltip when disabled — an empty-message Tooltip on the
           // enabled button can flash a blank popup on hover on some platforms.

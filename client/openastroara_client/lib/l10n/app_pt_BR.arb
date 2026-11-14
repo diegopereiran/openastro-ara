@@ -1479,7 +1479,7 @@
   "firstRunRigsFound": "Setups encontrados na sua rede",
   "firstRunLooking": "Procurando servidores… nova busca a cada poucos segundos.\nSe o seu não aparecer, arraste para baixo, toque em ⟳ (canto superior direito) ou adicione manualmente abaixo.",
   "firstRunAddManually": "Ou adicione manualmente:",
-  "firstRunHostLabel": "Nome do host ou IP",
+  "firstRunHostLabel": "Host ou IP",
   "firstRunPortLabel": "Porta",
   "firstRunUse": "Usar",
   "firstRunPlanOffline": "Planejar offline — monte sua noite sem um servidor",

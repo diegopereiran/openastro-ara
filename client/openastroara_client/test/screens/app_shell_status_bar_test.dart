@@ -153,7 +153,11 @@ void main() {
     tester,
   ) async {
     await _pumpAt(tester, 1470, locale: const Locale('pt', 'BR'));
-    for (final label in ['Biblioteca de imagens', 'Calibração', 'Planejamento']) {
+    for (final label in [
+      'Biblioteca de imagens',
+      'Calibração',
+      'Planejamento',
+    ]) {
       expect(find.text(label), findsWidgets, reason: label);
     }
     expect(find.byTooltip('Ajuda e relatar um problema'), findsOneWidget);

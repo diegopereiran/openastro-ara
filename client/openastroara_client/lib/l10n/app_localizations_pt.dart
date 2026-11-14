@@ -11179,7 +11179,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get firstRunAddManually => 'Ou adicione manualmente:';
 
   @override
-  String get firstRunHostLabel => 'Nome do host ou IP';
+  String get firstRunHostLabel => 'Host ou IP';
 
   @override
   String get firstRunPortLabel => 'Porta';

@@ -74,4 +74,29 @@ void main() {
     expect(find.text('Salvar e sair'), findsOneWidget);
     expect(find.text('Next'), findsNothing);
   });
+
+  for (final locale in const [Locale('en'), Locale('pt', 'BR')]) {
+    testWidgets('the wizard footer keeps Next on a 390 px phone in $locale',
+        (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          locale: locale,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const WizardShell(),
+        ),
+      ));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      final next = tester.getRect(find.byType(FilledButton));
+      expect(next.left, greaterThanOrEqualTo(0));
+      expect(next.right, lessThanOrEqualTo(390));
+    });
+  }
 }
