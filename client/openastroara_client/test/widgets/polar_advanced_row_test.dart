@@ -143,6 +143,29 @@ void main() {
   );
 
   testWidgets(
+    'the closed row sums up the rig\'s turn, step and exposure (#1736)',
+    (tester) async {
+      final rig = _Api()
+        ..settings = const PolarAlignSettings(
+          seedRotationDeg: 45,
+          checkStepDeg: 20,
+          coarseExposureSeconds: 5,
+        );
+      await _pump(tester, rig: rig, open: false);
+      expect(find.text('45° turn · 20° step · 5 s'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'the closed row shows no summary after a failed settings load (#1736)',
+    (tester) async {
+      final rig = _Api()..getError = StateError('rig gone');
+      await _pump(tester, rig: rig, open: false);
+      expect(find.textContaining('° turn'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'an edit in the row saves at once and the Settings panel shows it (#1736)',
     (tester) async {
       final api = await _pump(tester);
