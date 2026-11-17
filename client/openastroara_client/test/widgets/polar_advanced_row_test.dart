@@ -239,6 +239,15 @@ void main() {
     },
   );
 
+  testWidgets('NaN is refused in the field and nothing is sent (#1736)', (
+    tester,
+  ) async {
+    final api = await _pump(tester);
+    await _enter(tester, _seed, 'NaN');
+    expect(api.saved, isEmpty);
+    expect(find.text('Out of range: use 5 to 120'), findsOneWidget);
+  });
+
   testWidgets(
     'not loaded: Retry instead of the knobs, nothing saved; Retry loads them (#1736)',
     (tester) async {

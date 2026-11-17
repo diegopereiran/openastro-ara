@@ -249,7 +249,7 @@ class _PolarAdvancedRowState extends ConsumerState<PolarAdvancedRow> {
           value: polarKnobText(read(current)),
           onCommit: (text) {
             final v = double.tryParse(text.trim());
-            if (v == null || v < range.min || v > range.max) {
+            if (v == null || !(v >= range.min && v <= range.max)) {
               return l10n.polarAdvancedOutOfRange(
                 l10n.polarAdvancedRange(
                   polarKnobText(range.min),
